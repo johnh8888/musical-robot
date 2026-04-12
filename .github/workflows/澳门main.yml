@@ -1,0 +1,32 @@
+name: 澳门六合彩预测
+
+on:
+  schedule:
+    - cron: '0 15 * * *'   # 每天 UTC 15:00 (北京时间 23:00) 执行
+  workflow_dispatch:        
+
+jobs:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      # 步骤1：检出代码
+      - uses: actions/checkout@v3
+
+      # 步骤2：设置 Python 环境
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      # 步骤3：安装依赖
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # 步骤4：运行你的脚本 (将文件名替换成你的)
+      - name: Run prediction script
+        run: python macau_predict.py
