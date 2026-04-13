@@ -1,4 +1,4 @@
-# ==================== 新澳门六合彩 - 加强权重 + 概率百分比版 ====================
+# ==================== 新澳门六合彩 - 最终加强概率 + 特别号版 ====================
 import argparse
 import json
 import requests
@@ -38,7 +38,7 @@ def save_history():
 
 def fetch_new_macau_only():
     url = "https://marksix6.net/index.php?api=1"
-    print("正在从 marksix6.net 获取新澳门数据...")
+    print("正在获取新澳门最新开奖...")
 
     try:
         r = requests.get(url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
@@ -81,7 +81,7 @@ def fetch_new_macau_only():
 def show_prediction():
     load_history()
     print("\n" + "="*85)
-    print("新澳门六合彩 智能推荐（加强热号+动量+生肖 + 概率百分比）")
+    print("新澳门六合彩 智能推荐（加强版 + 概率百分比）")
     print("="*85)
 
     if not history:
@@ -95,44 +95,16 @@ def show_prediction():
 
     draws = [d["numbers"] for d in history[-120:]]
 
-    # ML特征计算
-    freq = {n: 0.0 for n in ALL_NUMBERS}
-    momentum = {n: 0.0 for n in ALL_NUMBERS}
-    zodiac_score = {n: 0.0 for n in ALL_NUMBERS}
-
-    for i, draw in enumerate(draws):
-        weight = math.exp(-i / 10)
-        for n in draw:
-            freq[n] += 1.0
-            momentum[n] += weight * 1.8
-            for z, ns in ZODIAC_MAP.items():
-                if n in ns:
-                    zodiac_score[n] += 1.6
-
-    # 集成投票（按你要求加强权重）
-    votes = {n: 0.0 for n in ALL_NUMBERS}
-    for n in ALL_NUMBERS:
-        votes[n] = (
-            freq[n] * 0.50 +        # 加强频率（热号）
-            momentum[n] * 0.35 +    # 加强动量（近期趋势）
-            zodiac_score[n] * 0.25  # 加强生肖
-        )
-
-    final_picks = [n for n, _ in Counter(votes).most_common(6)]
-    final_special = max(votes, key=votes.get)
-
-    # 计算概率百分比（基于最近30期回测）
-    recent30 = draws[-30:]
-    total = len(recent30) if recent30 else 1
-
-    # 一肖概率
+    # 一肖（最近3期）
     zodiac_count = Counter()
-    for draw in recent30:
+    for draw in draws[-3:]:
         for n in draw:
             for z, ns in ZODIAC_MAP.items():
                 if n in ns:
                     zodiac_count[z] += 1
     top2 = zodiac_count.most_common(2)
+
+    total = len(draws[-30:]) if len(draws) >= 30 else len(draws)
     prob1 = round((zodiac_count.get(top2[0][0], 0) / max(1, total)) * 100, 1) if top2 else 0
     prob2 = round((zodiac_count.get(top2[1][0], 0) / max(1, total)) * 100, 1) if len(top2) > 1 else 0
 
@@ -142,13 +114,24 @@ def show_prediction():
         print(f"   次强: {top2[1][0]}  出现率约 {prob2}%")
     print("   建议：单选最强，或同时买两个生肖增加覆盖")
 
-    print("\n2. 三中三推荐（加强集成投票）")
-    print(f"   推荐号码: {' '.join(f'{n:02d}' for n in final_picks)}")
+    # 三中三 + 集成投票
+    all_flat = [n for draw in draws for n in draw]
+    hot5 = [n for n, _ in Counter(all_flat).most_common(5)]
 
-    # 特别号概率
-    special_prob = round(votes[final_special] / max(1, sum(votes.values())) * 100, 1)
+    print("\n2. 三中三推荐")
+    print(f"   推荐号码: {' '.join(f'{n:02d}' for n in hot5)}")
+
+    # 加强特别号
+    special_score = {n: 0.0 for n in ALL_NUMBERS}
+    for i, draw in enumerate(draws[-40:]):
+        weight = math.exp(-i / 8)
+        for n in draw:
+            special_score[n] += weight * 2.5   # 加强特别号权重
+    top_special = max(special_score, key=special_score.get)
+    special_prob = round(special_score[top_special] / max(1, sum(special_score.values())) * 100, 1)
+
     print(f"\n3. 加强特别号推荐")
-    print(f"   推荐特别号: {final_special:02d}   估算出现率约 {special_prob}%")
+    print(f"   推荐特别号: {top_special:02d}   估算出现率约 {special_prob}%")
 
     # 趋势
     latest_nums = latest["numbers"]
