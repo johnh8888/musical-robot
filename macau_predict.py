@@ -1,4 +1,4 @@
-# ==================== 新澳门六合彩 - 最终稳定实用版 ====================
+# ==================== 新澳门六合彩 - 最终实用版（支持 auto） ====================
 import argparse
 import json
 import requests
@@ -36,7 +36,7 @@ def save_history():
 
 def fetch_new_macau_only():
     url = "https://marksix6.net/index.php?api=1"
-    print("正在从 marksix6.net 获取新澳门数据...")
+    print("正在从 marksix6.net 获取新澳门最新开奖...")
 
     try:
         r = requests.get(url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
@@ -79,11 +79,11 @@ def fetch_new_macau_only():
 def show_prediction():
     load_history()
     print("\n" + "="*80)
-    print("新澳门六合彩 智能推荐（最终稳定版）")
+    print("新澳门六合彩 智能推荐")
     print("="*80)
 
     if not history:
-        print("暂无数据，请先运行: python macau_predict.py sync")
+        print("暂无数据，请先运行 sync")
         return
 
     latest = history[-1]
@@ -108,7 +108,7 @@ def show_prediction():
     # 三中三
     all_flat = [n for draw in history for n in draw["numbers"]]
     hot5 = [n for n, _ in Counter(all_flat).most_common(5)]
-    print("\n2. 三中三推荐（5个热门号码）")
+    print("\n2. 三中三推荐")
     print(f"   推荐号码: {' '.join(f'{n:02d}' for n in hot5)}")
 
     # 单双 大小 波色
@@ -119,17 +119,22 @@ def show_prediction():
     blue = sum(1 for n in latest_nums if n in COLOR_MAP["蓝"])
     green = 6 - red - blue
 
-    print("\n3. 最新一期趋势")
+    print("\n3. 最新趋势")
     print(f"   单双：奇{odd} : 偶{6-odd}")
     print(f"   大小：大{big} : 小{6-big}")
     print(f"   波色：红{red}  蓝{blue}  绿{green}")
 
     print("\n理性提醒：仅供娱乐参考，请严格控制投注金额！")
 
+def auto_run():
+    print("=== 一键自动更新 + 预测 ===")
+    fetch_new_macau_only()
+    show_prediction()
+
 def main():
     load_history()
     parser = argparse.ArgumentParser()
-    parser.add_argument("cmd", choices=["sync", "add", "show"], nargs="?", default="show")
+    parser.add_argument("cmd", choices=["sync", "add", "show", "auto"], nargs="?", default="show")
     args = parser.parse_args()
 
     if args.cmd == "sync":
@@ -141,6 +146,8 @@ def main():
         history.append({"issue": issue, "numbers": nums, "special": special})
         save_history()
         print("添加成功")
+    elif args.cmd == "auto":
+        auto_run()
     else:
         show_prediction()
 
