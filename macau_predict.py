@@ -1,4 +1,4 @@
-# ==================== 新澳门六合彩 - 加强热号+动量+生肖版 ====================
+# ==================== 新澳门六合彩 - 加强权重 + 概率百分比版 ====================
 import argparse
 import json
 import requests
@@ -81,7 +81,7 @@ def fetch_new_macau_only():
 def show_prediction():
     load_history()
     print("\n" + "="*85)
-    print("新澳门六合彩 智能推荐（加强热号 + 动量 + 生肖）")
+    print("新澳门六合彩 智能推荐（加强热号+动量+生肖 + 概率百分比）")
     print("="*85)
 
     if not history:
@@ -101,13 +101,13 @@ def show_prediction():
     zodiac_score = {n: 0.0 for n in ALL_NUMBERS}
 
     for i, draw in enumerate(draws):
-        weight = math.exp(-i / 10)   # 近期动量权重
+        weight = math.exp(-i / 10)
         for n in draw:
             freq[n] += 1.0
-            momentum[n] += weight * 1.8   # 加强动量
+            momentum[n] += weight * 1.8
             for z, ns in ZODIAC_MAP.items():
                 if n in ns:
-                    zodiac_score[n] += 1.6    # 加强生肖权重
+                    zodiac_score[n] += 1.6
 
     # 集成投票（按你要求加强权重）
     votes = {n: 0.0 for n in ALL_NUMBERS}
@@ -121,21 +121,34 @@ def show_prediction():
     final_picks = [n for n, _ in Counter(votes).most_common(6)]
     final_special = max(votes, key=votes.get)
 
-    print("1. 一肖推荐（最近3期统计）")
+    # 计算概率百分比（基于最近30期回测）
+    recent30 = draws[-30:]
+    total = len(recent30) if recent30 else 1
+
+    # 一肖概率
     zodiac_count = Counter()
-    for draw in draws[-3:]:
+    for draw in recent30:
         for n in draw:
             for z, ns in ZODIAC_MAP.items():
                 if n in ns:
                     zodiac_count[z] += 1
     top2 = zodiac_count.most_common(2)
-    print(f"   最强: {top2[0][0]}")
+    prob1 = round((zodiac_count.get(top2[0][0], 0) / max(1, total)) * 100, 1) if top2 else 0
+    prob2 = round((zodiac_count.get(top2[1][0], 0) / max(1, total)) * 100, 1) if len(top2) > 1 else 0
+
+    print("1. 一肖推荐（最近3期统计）")
+    print(f"   最强: {top2[0][0]}  出现率约 {prob1}%")
     if len(top2) > 1:
-        print(f"   次强: {top2[1][0]}")
+        print(f"   次强: {top2[1][0]}  出现率约 {prob2}%")
+    print("   建议：单选最强，或同时买两个生肖增加覆盖")
 
     print("\n2. 三中三推荐（加强集成投票）")
     print(f"   推荐号码: {' '.join(f'{n:02d}' for n in final_picks)}")
-    print(f"   特别号推荐: {final_special:02d}")
+
+    # 特别号概率
+    special_prob = round(votes[final_special] / max(1, sum(votes.values())) * 100, 1)
+    print(f"\n3. 加强特别号推荐")
+    print(f"   推荐特别号: {final_special:02d}   估算出现率约 {special_prob}%")
 
     # 趋势
     latest_nums = latest["numbers"]
@@ -145,12 +158,12 @@ def show_prediction():
     blue = sum(1 for n in latest_nums if n in COLOR_MAP["蓝"])
     green = 6 - red - blue
 
-    print("\n3. 最新趋势")
+    print("\n4. 最新趋势")
     print(f"   单双：奇{odd} : 偶{6-odd}")
     print(f"   大小：大{big} : 小{6-big}")
     print(f"   波色：红{red}  蓝{blue}  绿{green}")
 
-    print("\n理性提醒：以上为加强热号+动量+生肖版推荐，仅供娱乐，请严格控制金额！")
+    print("\n理性提醒：以上为加强版推荐，仅供娱乐，请严格控制金额！")
 
 def main():
     load_history()
