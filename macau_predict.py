@@ -1,7 +1,8 @@
-# ==================== 新澳门六合彩 - 最终实用版（支持 auto） ====================
+# ==================== 新澳门六合彩 - ML加强集成投票版 ====================
 import argparse
 import json
 import requests
+import math
 from collections import Counter
 from pathlib import Path
 
@@ -18,6 +19,7 @@ COLOR_MAP = {
     "绿": [5,6,11,16,17,22,27,28,33,38,39,43,44,49]
 }
 
+ALL_NUMBERS = list(range(1, 50))
 DATA_FILE = Path("macau_history.json")
 history = []
 
@@ -36,7 +38,7 @@ def save_history():
 
 def fetch_new_macau_only():
     url = "https://marksix6.net/index.php?api=1"
-    print("正在从 marksix6.net 获取新澳门最新开奖...")
+    print("正在获取新澳门数据...")
 
     try:
         r = requests.get(url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
@@ -78,9 +80,9 @@ def fetch_new_macau_only():
 
 def show_prediction():
     load_history()
-    print("\n" + "="*80)
-    print("新澳门六合彩 智能推荐")
-    print("="*80)
+    print("\n" + "="*85)
+    print("新澳门六合彩 终极ML加强版智能推荐")
+    print("="*85)
 
     if not history:
         print("暂无数据，请先运行 sync")
@@ -91,27 +93,52 @@ def show_prediction():
     print(f"最新开奖 → 第 {latest['issue']} 期")
     print(f"正码: {nums_str}   特别号: {latest['special']:02d}\n")
 
-    # 一肖
+    draws = [d["numbers"] for d in history[-120:]]
+
+    # ML特征计算
+    freq = {n: 0.0 for n in ALL_NUMBERS}
+    momentum = {n: 0.0 for n in ALL_NUMBERS}
+    zodiac_score = {n: 0.0 for n in ALL_NUMBERS}
+
+    for i, draw in enumerate(draws):
+        weight = math.exp(-i / 12)   # 加强近期动量
+        for n in draw:
+            freq[n] += 1.0
+            momentum[n] += weight
+            for z, ns in ZODIAC_MAP.items():
+                if n in ns:
+                    zodiac_score[n] += 1.5
+
+    # 集成投票（加强动量+频率+生肖）
+    votes = {n: 0.0 for n in ALL_NUMBERS}
+    for n in ALL_NUMBERS:
+        votes[n] = (
+            freq[n] * 0.45 + 
+            momentum[n] * 0.35 + 
+            zodiac_score[n] * 0.20
+        )
+
+    # 最终选号
+    final_picks = [n for n, _ in Counter(votes).most_common(6)]
+    final_special = max(votes, key=votes.get)
+
+    print("1. 一肖推荐（ML加强）")
     zodiac_count = Counter()
-    for draw in history[-40:]:
-        for n in draw["numbers"]:
+    for draw in draws[-40:]:
+        for n in draw:
             for z, ns in ZODIAC_MAP.items():
                 if n in ns:
                     zodiac_count[z] += 1
     top2 = zodiac_count.most_common(2)
-
-    print("1. 一肖推荐")
     print(f"   最强: {top2[0][0]}")
     if len(top2) > 1:
         print(f"   次强: {top2[1][0]}")
 
-    # 三中三
-    all_flat = [n for draw in history for n in draw["numbers"]]
-    hot5 = [n for n, _ in Counter(all_flat).most_common(5)]
-    print("\n2. 三中三推荐")
-    print(f"   推荐号码: {' '.join(f'{n:02d}' for n in hot5)}")
+    print("\n2. 三中三推荐（集成投票）")
+    print(f"   推荐号码: {' '.join(f'{n:02d}' for n in final_picks)}")
+    print(f"   特别号推荐: {final_special:02d}")
 
-    # 单双 大小 波色
+    # 趋势
     latest_nums = latest["numbers"]
     odd = sum(1 for n in latest_nums if n % 2 == 1)
     big = sum(1 for n in latest_nums if n >= 25)
@@ -124,17 +151,12 @@ def show_prediction():
     print(f"   大小：大{big} : 小{6-big}")
     print(f"   波色：红{red}  蓝{blue}  绿{green}")
 
-    print("\n理性提醒：仅供娱乐参考，请严格控制投注金额！")
-
-def auto_run():
-    print("=== 一键自动更新 + 预测 ===")
-    fetch_new_macau_only()
-    show_prediction()
+    print("\n理性提醒：以上为ML+集成投票加强版推荐，仅供娱乐参考，请严格控制投注金额！")
 
 def main():
     load_history()
     parser = argparse.ArgumentParser()
-    parser.add_argument("cmd", choices=["sync", "add", "show", "auto"], nargs="?", default="show")
+    parser.add_argument("cmd", choices=["sync", "add", "show"], nargs="?", default="show")
     args = parser.parse_args()
 
     if args.cmd == "sync":
@@ -146,8 +168,6 @@ def main():
         history.append({"issue": issue, "numbers": nums, "special": special})
         save_history()
         print("添加成功")
-    elif args.cmd == "auto":
-        auto_run()
     else:
         show_prediction()
 
