@@ -12,6 +12,12 @@ ZODIAC_MAP = {
     "兔": [4,16,28,40], "龙": [3,15,27,39], "蛇": [2,14,26,38]
 }
 
+COLOR_MAP = {
+    "红": [1,2,7,8,12,13,18,19,23,24,29,30,34,35,40,45,46],
+    "蓝": [3,4,9,10,14,15,20,25,31,36,37,41,42,47,48],
+    "绿": [5,6,11,16,17,22,27,28,33,38,39,43,44,49]
+}
+
 DATA_FILE = Path("macau_history.json")
 history = []
 
@@ -30,7 +36,7 @@ def save_history():
 
 def fetch_new_macau_only():
     url = "https://marksix6.net/index.php?api=1"
-    print("正在获取新澳门最新开奖...")
+    print("正在从 marksix6.net 获取新澳门数据...")
 
     try:
         r = requests.get(url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
@@ -73,11 +79,11 @@ def fetch_new_macau_only():
 def show_prediction():
     load_history()
     print("\n" + "="*80)
-    print("新澳门六合彩 智能推荐（最终实用版）")
+    print("新澳门六合彩 智能推荐（最终稳定版）")
     print("="*80)
 
     if not history:
-        print("暂无数据，请先运行 sync")
+        print("暂无数据，请先运行: python macau_predict.py sync")
         return
 
     latest = history[-1]
@@ -102,18 +108,18 @@ def show_prediction():
     # 三中三
     all_flat = [n for draw in history for n in draw["numbers"]]
     hot5 = [n for n, _ in Counter(all_flat).most_common(5)]
-    print("\n2. 三中三推荐")
+    print("\n2. 三中三推荐（5个热门号码）")
     print(f"   推荐号码: {' '.join(f'{n:02d}' for n in hot5)}")
 
-    # 趋势
+    # 单双 大小 波色
     latest_nums = latest["numbers"]
     odd = sum(1 for n in latest_nums if n % 2 == 1)
     big = sum(1 for n in latest_nums if n >= 25)
-    red = sum(1 for n in latest_nums if n in [1,2,7,8,12,13,18,19,23,24,29,30,34,35,40,45,46])
-    blue = sum(1 for n in latest_nums if n in [3,4,9,10,14,15,20,25,31,36,37,41,42,47,48])
+    red = sum(1 for n in latest_nums if n in COLOR_MAP["红"])
+    blue = sum(1 for n in latest_nums if n in COLOR_MAP["蓝"])
     green = 6 - red - blue
 
-    print("\n3. 最新趋势")
+    print("\n3. 最新一期趋势")
     print(f"   单双：奇{odd} : 偶{6-odd}")
     print(f"   大小：大{big} : 小{6-big}")
     print(f"   波色：红{red}  蓝{blue}  绿{green}")
