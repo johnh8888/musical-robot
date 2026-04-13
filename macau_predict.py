@@ -1,4 +1,4 @@
-# ==================== 新澳门六合彩 - 终极ML加强版（支持 auto） ====================
+# ==================== 新澳门六合彩 - 加强特别号 + 概率百分比版 ====================
 import argparse
 import json
 import requests
@@ -38,7 +38,7 @@ def save_history():
 
 def fetch_new_macau_only():
     url = "https://marksix6.net/index.php?api=1"
-    print("正在从 marksix6.net 获取新澳门数据...")
+    print("正在获取新澳门最新开奖...")
 
     try:
         r = requests.get(url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
@@ -81,7 +81,7 @@ def fetch_new_macau_only():
 def show_prediction():
     load_history()
     print("\n" + "="*85)
-    print("新澳门六合彩 终极ML加强版智能推荐")
+    print("新澳门六合彩 智能推荐（加强特别号 + 概率百分比）")
     print("="*85)
 
     if not history:
@@ -93,38 +93,50 @@ def show_prediction():
     print(f"最新开奖 → 第 {latest['issue']} 期")
     print(f"正码: {nums_str}   特别号: {latest['special']:02d}\n")
 
-    draws = [d["numbers"] for d in history[-120:]]
+    draws = [d["numbers"] for d in history[-60:]]
 
-    # ML加强集成投票（动量+频率+生肖）
-    votes = {n: 0.0 for n in ALL_NUMBERS}
-    for i, draw in enumerate(draws):
-        weight = math.exp(-i / 10)   # 加强近期动量
-        for n in draw:
-            votes[n] += 2.5 * weight   # 频率 + 动量
-            for z, ns in ZODIAC_MAP.items():
-                if n in ns:
-                    votes[n] += 1.8        # 加强生肖权重
-
-    final_picks = [n for n, _ in Counter(votes).most_common(6)]
-    final_special = max(votes, key=votes.get)
-
-    print("1. 一肖推荐（ML加强）")
+    # 一肖（最近3期统计）
     zodiac_count = Counter()
-    for draw in draws[-40:]:
+    for draw in draws[-3:]:   # 最近3期
         for n in draw:
             for z, ns in ZODIAC_MAP.items():
                 if n in ns:
                     zodiac_count[z] += 1
     top2 = zodiac_count.most_common(2)
-    print(f"   最强: {top2[0][0]}")
+
+    # 简单概率估算（基于最近30期）
+    total_periods = len(draws[-30:]) if len(draws) >= 30 else len(draws)
+    prob1 = round((zodiac_count[top2[0][0]] / max(1, total_periods)) * 100, 1) if top2 else 0
+    prob2 = round((zodiac_count[top2[1][0]] / max(1, total_periods)) * 100, 1) if len(top2) > 1 else 0
+
+    print("1. 一肖推荐（最近3期统计）")
+    print(f"   最强: {top2[0][0]}  出现率约 {prob1}%")
     if len(top2) > 1:
-        print(f"   次强: {top2[1][0]}")
+        print(f"   次强: {top2[1][0]}  出现率约 {prob2}%")
+    print("   建议：单选最强，或同时买两个生肖增加覆盖")
 
-    print("\n2. 三中三推荐（集成投票）")
-    print(f"   推荐号码: {' '.join(f'{n:02d}' for n in final_picks)}")
-    print(f"   特别号推荐: {final_special:02d}")
+    # 三中三
+    all_flat = [n for draw in draws for n in draw]
+    hot5 = [n for n, _ in Counter(all_flat).most_common(5)]
+    print("\n2. 三中三推荐（5个热门号码）")
+    print(f"   推荐号码: {' '.join(f'{n:02d}' for n in hot5)}")
 
-    # 趋势
+    # 加强特别号
+    special_score = {n: 0.0 for n in ALL_NUMBERS}
+    for i, draw in enumerate(draws[-40:]):
+        weight = math.exp(-i / 8)
+        for n in draw:
+            special_score[n] += weight * 1.8   # 加强动量
+    for n in ALL_NUMBERS:
+        special_score[n] += (len(draws) - [d for d in draws if n in d][-1:][0] if any(n in d for d in draws) else len(draws)) * 0.3
+
+    top_special = max(special_score, key=special_score.get)
+    special_prob = round(special_score[top_special] / max(1, sum(special_score.values())) * 100, 1)
+
+    print(f"\n3. 加强特别号推荐")
+    print(f"   推荐特别号: {top_special:02d}   估算出现率约 {special_prob}%")
+
+    # 单双 大小 波色
     latest_nums = latest["numbers"]
     odd = sum(1 for n in latest_nums if n % 2 == 1)
     big = sum(1 for n in latest_nums if n >= 25)
@@ -132,22 +144,17 @@ def show_prediction():
     blue = sum(1 for n in latest_nums if n in COLOR_MAP["蓝"])
     green = 6 - red - blue
 
-    print("\n3. 最新趋势")
+    print("\n4. 最新一期趋势")
     print(f"   单双：奇{odd} : 偶{6-odd}")
     print(f"   大小：大{big} : 小{6-big}")
     print(f"   波色：红{red}  蓝{blue}  绿{green}")
 
-    print("\n理性提醒：以上为ML加强集成投票推荐，仅供娱乐，请严格控制金额！")
-
-def auto_run():
-    print("=== 一键自动更新 + 预测 ===")
-    fetch_new_macau_only()
-    show_prediction()
+    print("\n理性提醒：以上为ML加强版推荐，仅供娱乐参考，请严格控制投注金额！")
 
 def main():
     load_history()
     parser = argparse.ArgumentParser()
-    parser.add_argument("cmd", choices=["sync", "add", "show", "auto"], nargs="?", default="show")
+    parser.add_argument("cmd", choices=["sync", "add", "show"], nargs="?", default="show")
     args = parser.parse_args()
 
     if args.cmd == "sync":
@@ -159,8 +166,6 @@ def main():
         history.append({"issue": issue, "numbers": nums, "special": special})
         save_history()
         print("添加成功")
-    elif args.cmd == "auto":
-        auto_run()
     else:
         show_prediction()
 
