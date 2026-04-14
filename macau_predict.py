@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-新澳门六合彩 - 终极科学版（仅使用最近7期数据 + 动态权重自适应）
+新澳门六合彩 - 终极科学版（仅使用最近7期数据 + 动态权重自适应 + 极强推荐 + 特别号统计）
 用法:
     python macau_predict.py sync --year 2026
     python macau_predict.py predict
     python macau_predict.py show
-    python macau_predict.py backtest
 """
 
 import argparse
@@ -814,14 +813,31 @@ def cmd_show(args: argparse.Namespace) -> None:
     for i, (num, score) in enumerate(top6_specials, 1):
         print(f"   {i}. {num:02d} ({get_zodiac(num)})  ─ 综合评分: {score*100:.1f}%")
 
-    # ---------- 极强推荐（三中三中最佳组合） ----------
-    if len(hot5) >= 3 and combo_hits:
-        best_combo = max(three_combos, key=lambda c: (combo_hits[c], -three_combos.index(c)))
-        best_hits = combo_hits[best_combo]
-        best_prob = best_hits / len(draws) * 100 if draws else 0
-        best_combo_str = " ".join(f"{n:02d}({get_zodiac(n)})" for n in best_combo)
-        print(f"\n🏆 极强推荐组合: {best_combo_str}")
-        print(f"   近{len(draws)}期同时出现 {best_hits} 次 ({best_prob:.1f}%)，是近期最稳定的三码组合。")
+    # ---------- 三中三推荐 ----------
+    if len(hot5) >= 3:
+        print("\n🎰 三中三推荐 (从正码5个组合生成，共10组):")
+        three_combos = list(combinations(sorted(hot5), 3))
+        combo_hits = {}
+        for combo in three_combos:
+            hits = 0
+            for draw in draws:
+                if all(n in draw for n in combo):
+                    hits += 1
+            combo_hits[combo] = hits
+        for i, combo in enumerate(three_combos, 1):
+            hits = combo_hits[combo]
+            prob = hits / len(draws) * 100 if draws else 0
+            combo_str = " ".join(f"{n:02d}({get_zodiac(n)})" for n in combo)
+            print(f"   {i:2d}. {combo_str}  ─ 近{len(draws)}期同时出现 {hits} 次 ({prob:.1f}%)")
+
+        # ---------- 极强推荐（三中三中最佳组合） ----------
+        if combo_hits:
+            best_combo = max(three_combos, key=lambda c: (combo_hits[c], -three_combos.index(c)))
+            best_hits = combo_hits[best_combo]
+            best_prob = best_hits / len(draws) * 100 if draws else 0
+            best_combo_str = " ".join(f"{n:02d}({get_zodiac(n)})" for n in best_combo)
+            print(f"\n🏆 极强推荐组合: {best_combo_str}")
+            print(f"   近{len(draws)}期同时出现 {best_hits} 次 ({best_prob:.1f}%)，是近期最稳定的三码组合。")
 
     # ---------- 最近7期特别号策略命中统计 ----------
     recent_7_rows = conn.execute("""
@@ -867,7 +883,6 @@ def cmd_show(args: argparse.Namespace) -> None:
 def cmd_backtest(args: argparse.Namespace) -> None:
     print("回测功能需较长历史数据，当前7期模式不建议运行完整回测。")
     print("如需回测，请使用完整版脚本。")
-    pass
 
 
 def build_parser() -> argparse.ArgumentParser:
