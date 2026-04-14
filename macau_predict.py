@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-新澳门六合彩 - 终极科学版（仅使用最近7期数据 + 动态权重自适应 + 极强推荐 + 特别号统计）
+新澳门六合彩 - 终极科学版（7期数据 + 动态权重 + PushPlus微信推送）
 用法:
     python macau_predict.py sync --year 2026
     python macau_predict.py predict
@@ -12,6 +12,7 @@ import argparse
 import json
 import logging
 import math
+import os
 import random
 import sqlite3
 from collections import Counter, defaultdict
@@ -350,10 +351,10 @@ def find_optimal_weights(
     base_weights: Dict[str, float],
 ) -> Dict[str, float]:
     """在7期数据下，用最近2期作为验证集进行快速网格搜索"""
-    if len(draws) < 4:  # 至少需要4期才能做简单回测
+    if len(draws) < 4:
         return base_weights
 
-    test_window = max(2, len(draws) // 3)  # 7期时约2-3期
+    test_window = max(2, len(draws) // 3)
     best_weights = base_weights.copy()
     best_hits = 0.0
 
@@ -407,7 +408,7 @@ def generate_strategy_score_with_weights(
         else:
             omit[n] = len(draws)
 
-    mom = calculate_exp_momentum(draws, half_life=2)  # 短半衰期
+    mom = calculate_exp_momentum(draws, half_life=2)
 
     def norm(d):
         vals = list(d.values())
@@ -637,6 +638,34 @@ def bayesian_posterior(hits: int, total: int) -> float:
     return (hits + 1) / (total + 49) * 100
 
 
+# -------------------- PushPlus 微信推送 --------------------
+def send_pushplus_notification(title: str, content: str) -> bool:
+    """使用 PushPlus 发送微信消息"""
+    token = os.environ.get("PUSHPLUS_TOKEN", "")
+    if not token:
+        print("ℹ️ 未配置 PUSHPLUS_TOKEN，跳过微信推送。")
+        return False
+
+    url = "http://www.pushplus.plus/send"
+    data = {"token": token, "title": title, "content": content}
+    try:
+        resp = requests.post(url, json=data, timeout=10)
+        if resp.status_code == 200:
+            result = resp.json()
+            if result.get("code") == 200:
+                print("✅ 已通过 PushPlus 推送到微信")
+                return True
+            else:
+                print(f"❌ PushPlus 推送失败: {result.get('msg')}")
+                return False
+        else:
+            print(f"❌ PushPlus 请求失败: HTTP {resp.status_code}")
+            return False
+    except Exception as e:
+        print(f"❌ PushPlus 推送异常: {e}")
+        return False
+
+
 # -------------------- 命令行接口 --------------------
 def cmd_sync(args: argparse.Namespace) -> None:
     conn = connect_db(args.db)
@@ -753,7 +782,8 @@ def cmd_show(args: argparse.Namespace) -> None:
     rate1 = zodiac_hit_rate(top1)
     rate2 = zodiac_hit_rate(top2)
 
-    print(f"📅 参考期号: {pending[0]['issue_no'] if pending else next_issue_number(latest['issue_no'])}")
+    next_issue_str = pending[0]['issue_no'] if pending else (next_issue_number(latest['issue_no']) if latest else "未知")
+    print(f"📅 参考期号: {next_issue_str}")
     print("-" * 60)
     print(f"🐉 最强生肖: {top1}  (近{min(5, len(draws))}期命中率 {rate1:.0f}%)")
     print(f"🐉 次强生肖: {top2}  (近{min(5, len(draws))}期命中率 {rate2:.0f}%)")
@@ -814,6 +844,7 @@ def cmd_show(args: argparse.Namespace) -> None:
         print(f"   {i}. {num:02d} ({get_zodiac(num)})  ─ 综合评分: {score*100:.1f}%")
 
     # ---------- 三中三推荐 ----------
+    best_combo = None
     if len(hot5) >= 3:
         print("\n🎰 三中三推荐 (从正码5个组合生成，共10组):")
         three_combos = list(combinations(sorted(hot5), 3))
@@ -830,7 +861,6 @@ def cmd_show(args: argparse.Namespace) -> None:
             combo_str = " ".join(f"{n:02d}({get_zodiac(n)})" for n in combo)
             print(f"   {i:2d}. {combo_str}  ─ 近{len(draws)}期同时出现 {hits} 次 ({prob:.1f}%)")
 
-        # ---------- 极强推荐（三中三中最佳组合） ----------
         if combo_hits:
             best_combo = max(three_combos, key=lambda c: (combo_hits[c], -three_combos.index(c)))
             best_hits = combo_hits[best_combo]
@@ -846,7 +876,7 @@ def cmd_show(args: argparse.Namespace) -> None:
     """).fetchall()
     if len(recent_7_rows) >= 3:
         print("\n📊 最近7期特别号策略命中统计:")
-        recent_7 = list(reversed(recent_7_rows))  # 按时间正序
+        recent_7 = list(reversed(recent_7_rows))
         strat_special_stats = {s: {"hits": 0, "total": 0} for s in STRATEGY_IDS}
         for row in recent_7:
             issue = row["issue_no"]
@@ -876,6 +906,18 @@ def cmd_show(args: argparse.Namespace) -> None:
 
     print("=" * 60)
     print("⚠️ 数据仅供参考，理性投注。")
+
+    # ---------- 构建微信推送消息 ----------
+    push_lines = []
+    push_lines.append(f"【新澳门预测】{next_issue_str}")
+    push_lines.append(f"🐉 最强生肖: {top1} ({rate1:.0f}%)  次强: {top2} ({rate2:.0f}%)")
+    push_lines.append(f"🎲 正码5个: {' '.join(f'{n:02d}' for n in hot5)}")
+    push_lines.append(f"🔮 特别号首选: {picked_special:02d} ({special_zod})")
+    if best_combo:
+        push_lines.append(f"🏆 极强三中三: {' '.join(f'{n:02d}' for n in best_combo)}")
+
+    push_content = "\n".join(push_lines)
+    send_pushplus_notification("新澳门六合彩预测", push_content)
 
     conn.close()
 
