@@ -339,7 +339,6 @@ def show_prediction() -> None:
         combo_str = " ".join(f"{n:02d}({get_zodiac(n)})" for n in combo)
         print(f"   {i:2d}. {combo_str}")
     print("=" * 55)
-    print("⚠️ 数据仅供参考，理性投注。\n")
 
 
 # ---------- 主程序 ----------
