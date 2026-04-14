@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-新澳门六合彩 - 终极科学版（含三中三推荐 + 近7期统计）
+新澳门六合彩 - 终极科学版（仅使用最近7期数据 + 动态权重自适应）
 用法:
     python macau_predict.py sync --year 2026
     python macau_predict.py predict
@@ -30,11 +30,11 @@ logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
-logger = logging.getLogger("macau_ultimate")
+logger = logging.getLogger("macau_7")
 
 # -------------------- 常量与配置 --------------------
 SCRIPT_DIR = Path(__file__).resolve().parent
-DB_PATH_DEFAULT = str(SCRIPT_DIR / "macau_ultimate.db")
+DB_PATH_DEFAULT = str(SCRIPT_DIR / "macau_7.db")
 
 # 新澳门历史数据接口
 MACAU_HISTORY_URL = "https://history.macaumarksix.com/history/macaujc2/y/{}"
@@ -76,6 +76,9 @@ COLOR_MAP = {
 ALL_NUMBERS = list(range(1, 50))
 MONTE_CARLO_TRIALS = 5000
 SUM_TARGET = (115, 185)
+
+# 预测时使用的历史期数（只取最近7期）
+PREDICT_WINDOW = 7
 
 
 # -------------------- 数据结构 --------------------
@@ -297,8 +300,8 @@ def sync_draws(conn: sqlite3.Connection, records: List[DrawRecord], source: str 
     return inserted, updated
 
 
-# -------------------- 高级特征工程 --------------------
-def get_recent_draws(conn: sqlite3.Connection, limit: int = 200) -> List[List[int]]:
+# -------------------- 高级特征工程（适配短窗口）--------------------
+def get_recent_draws(conn: sqlite3.Connection, limit: int = PREDICT_WINDOW) -> List[List[int]]:
     rows = conn.execute(
         "SELECT numbers_json FROM draws ORDER BY draw_date DESC, issue_no DESC LIMIT ?",
         (limit,)
@@ -306,7 +309,7 @@ def get_recent_draws(conn: sqlite3.Connection, limit: int = 200) -> List[List[in
     return [json.loads(r[0]) for r in rows]
 
 
-def get_recent_specials(conn: sqlite3.Connection, limit: int = 200) -> List[int]:
+def get_recent_specials(conn: sqlite3.Connection, limit: int = PREDICT_WINDOW) -> List[int]:
     rows = conn.execute(
         "SELECT special_number FROM draws ORDER BY draw_date DESC, issue_no DESC LIMIT ?",
         (limit,)
@@ -314,7 +317,8 @@ def get_recent_specials(conn: sqlite3.Connection, limit: int = 200) -> List[int]
     return [r[0] for r in rows]
 
 
-def calculate_exp_momentum(draws: List[List[int]], half_life: int = 6) -> Dict[int, float]:
+def calculate_exp_momentum(draws: List[List[int]], half_life: int = 2) -> Dict[int, float]:
+    """指数衰减动量，半衰期调短以适配7期数据"""
     scores = {n: 0.0 for n in ALL_NUMBERS}
     for i, draw in enumerate(draws):
         weight = math.exp(-i / half_life)
@@ -334,22 +338,23 @@ def calculate_pair_lift(draws: List[List[int]]) -> Dict[Tuple[int, int], float]:
     total = len(draws)
     lift_map = {}
     for (a, b), cnt in pair_count.items():
-        expected = (single_count[a] / total) * (single_count[b] / total) * total
+        expected = (single_count[a] / total) * (single_count[b] / total) * total if total > 0 else 0
         if expected > 0:
             lift_map[(a, b)] = cnt / expected
     return lift_map
 
 
-# -------------------- 动态权重优化 --------------------
+# -------------------- 动态权重优化（适配7期短窗口）--------------------
 def find_optimal_weights(
     draws: List[List[int]],
     specials: List[int],
     base_weights: Dict[str, float],
-    test_window: int = 30
 ) -> Dict[str, float]:
-    if len(draws) < test_window + 10:
+    """在7期数据下，用最近2期作为验证集进行快速网格搜索"""
+    if len(draws) < 4:  # 至少需要4期才能做简单回测
         return base_weights
 
+    test_window = max(2, len(draws) // 3)  # 7期时约2-3期
     best_weights = base_weights.copy()
     best_hits = 0.0
 
@@ -366,6 +371,8 @@ def find_optimal_weights(
             for i in range(test_window, len(draws)):
                 past_draws = draws[:i]
                 past_specials = specials[:i]
+                if len(past_draws) < 3:
+                    continue
                 score_obj = generate_strategy_score_with_weights(
                     past_draws, past_specials, {"w_freq": w_freq, "w_omit": w_omit, "w_mom": w_mom}
                 )
@@ -373,10 +380,11 @@ def find_optimal_weights(
                 total_hits += len(set(score_obj.main_picks) & actual)
                 count += 1
 
-            avg_hits = total_hits / count if count else 0
-            if avg_hits > best_hits:
-                best_hits = avg_hits
-                best_weights = {"w_freq": w_freq, "w_omit": w_omit, "w_mom": w_mom}
+            if count > 0:
+                avg_hits = total_hits / count
+                if avg_hits > best_hits:
+                    best_hits = avg_hits
+                    best_weights = {"w_freq": w_freq, "w_omit": w_omit, "w_mom": w_mom}
 
     return best_weights
 
@@ -400,7 +408,7 @@ def generate_strategy_score_with_weights(
         else:
             omit[n] = len(draws)
 
-    mom = calculate_exp_momentum(draws)
+    mom = calculate_exp_momentum(draws, half_life=2)  # 短半衰期
 
     def norm(d):
         vals = list(d.values())
@@ -535,7 +543,7 @@ def generate_strategy_score(
     base_cfg = STRATEGY_CONFIGS.get(strategy, STRATEGY_CONFIGS["balanced"])
     weights = {"w_freq": base_cfg["w_freq"], "w_omit": base_cfg["w_omit"], "w_mom": base_cfg["w_mom"]}
 
-    if use_dynamic_weights and strategy != "ensemble" and len(draws) >= 40:
+    if use_dynamic_weights and strategy != "ensemble" and len(draws) >= 4:
         weights = find_optimal_weights(draws, specials, weights)
 
     freq = {n: 0.0 for n in ALL_NUMBERS}
@@ -552,7 +560,7 @@ def generate_strategy_score(
         else:
             omit[n] = len(draws)
 
-    mom = calculate_exp_momentum(draws)
+    mom = calculate_exp_momentum(draws, half_life=2)
 
     def norm(d):
         vals = list(d.values())
@@ -580,11 +588,11 @@ def generate_strategy_score(
 
     markov = SpecialMarkovModel(2)
     markov.train(specials)
-    special_pick = markov.predict(specials[-5:])
+    special_pick = markov.predict(specials[-5:] if len(specials) >= 5 else specials)
     while special_pick in main_picks:
         special_pick = (special_pick % 49) + 1
 
-    confidence = sum(scores[n] for n in main_picks) / 6
+    confidence = sum(scores[n] for n in main_picks) / 6 if main_picks else 0
     return StrategyScore(main_picks, special_pick, confidence, scores)
 
 
@@ -600,81 +608,19 @@ def ensemble_vote(
         ranked = sorted(sc.items(), key=lambda x: x[1], reverse=True)
         for rank, (n, _) in enumerate(ranked):
             votes[n] += 49 - rank
-    norm_votes = {n: v / max(votes.values()) for n, v in votes.items()}
+    max_vote = max(votes.values()) if votes else 1
+    norm_votes = {n: v / max_vote for n, v in votes.items()}
     main_picks = monte_carlo_pick(norm_votes, pair_lift)
     special = SpecialMarkovModel(2)
     special.train(specials)
-    sp = special.predict(specials[-5:])
+    sp = special.predict(specials[-5:] if len(specials) >= 5 else specials)
     while sp in main_picks:
         sp = (sp % 49) + 1
-    confidence = sum(norm_votes[n] for n in main_picks) / 6
+    confidence = sum(norm_votes[n] for n in main_picks) / 6 if main_picks else 0
     return StrategyScore(main_picks, sp, confidence, norm_votes)
 
 
-# -------------------- 回测与评估 --------------------
-def run_rolling_backtest(conn: sqlite3.Connection, window: int = 100, step: int = 10):
-    rows = conn.execute("SELECT numbers_json, special_number FROM draws ORDER BY draw_date, issue_no").fetchall()
-    if len(rows) < window + 10:
-        return
-    all_draws = [json.loads(r[0]) for r in rows]
-    all_specials = [r[1] for r in rows]
-    results = defaultdict(list)
-
-    for i in range(window, len(all_draws), step):
-        train_draws = all_draws[max(0, i-window):i]
-        train_specials = all_specials[max(0, i-window):i]
-        pair_lift = calculate_pair_lift(train_draws)
-        for strat in STRATEGY_IDS:
-            score = generate_strategy_score(train_draws, train_specials, strat, pair_lift, use_dynamic_weights=True)
-            hits = len(set(score.main_picks) & set(all_draws[i]))
-            special_hit = 1 if score.special_pick == all_specials[i] else 0
-            results[strat].append((hits, special_hit, score.confidence))
-
-    for strat, records in results.items():
-        hits = [r[0] for r in records]
-        avg_hit = sum(hits) / len(hits)
-        hit1 = sum(1 for h in hits if h >= 1) / len(hits)
-        hit2 = sum(1 for h in hits if h >= 2) / len(hits)
-        hit3 = sum(1 for h in hits if h >= 3) / len(hits)
-        special_rate = sum(r[1] for r in records) / len(records)
-        returns = [h/6.0 + r[1]*0.5 for h, r in zip(hits, records)]
-        avg_ret = sum(returns) / len(returns)
-        std_ret = (sum((r-avg_ret)**2 for r in returns) / len(returns)) ** 0.5
-        sharpe = avg_ret / std_ret if std_ret > 0 else 0
-        conn.execute("""
-            INSERT OR REPLACE INTO backtest_stats
-            (strategy, total_runs, avg_hit, hit1_rate, hit2_rate, hit3_rate, special_rate, sharpe_ratio, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (strat, len(records), avg_hit, hit1, hit2, hit3, special_rate, sharpe, utc_now()))
-    conn.commit()
-
-
-def review_latest(conn: sqlite3.Connection) -> int:
-    row = conn.execute("SELECT issue_no, numbers_json, special_number FROM draws ORDER BY draw_date DESC LIMIT 1").fetchone()
-    if not row:
-        return 0
-    winning = set(json.loads(row["numbers_json"]))
-    winning_special = row["special_number"]
-    preds = conn.execute(
-        "SELECT id, numbers_json, special_number FROM predictions WHERE issue_no = ? AND status = 'PENDING'",
-        (row["issue_no"],)
-    ).fetchall()
-    reviewed = 0
-    for p in preds:
-        picked = json.loads(p["numbers_json"])
-        hit_count = len([n for n in picked if n in winning])
-        hit_rate = hit_count / 6.0
-        special_hit = 1 if p["special_number"] == winning_special else 0
-        conn.execute(
-            "UPDATE predictions SET status='REVIEWED', hit_count=?, hit_rate=?, special_hit=?, reviewed_at=? WHERE id=?",
-            (hit_count, hit_rate, special_hit, utc_now(), p["id"])
-        )
-        reviewed += 1
-    conn.commit()
-    return reviewed
-
-
-# -------------------- 概率计算工具 --------------------
+# -------------------- 概率计算工具（基于7期）--------------------
 def wilson_interval(hits: int, total: int, z: float = 1.96) -> Tuple[float, float]:
     if total == 0:
         return (0.0, 0.0)
@@ -703,30 +649,16 @@ def cmd_sync(args: argparse.Namespace) -> None:
         return
     ins, upd = sync_draws(conn, records, "macau_online")
     print(f"同步完成：新增 {ins} 期，更新 {upd} 期。")
-    draws = get_recent_draws(conn, 300)
-    if draws:
-        pair_lift = calculate_pair_lift(draws)
-        conn.execute("DELETE FROM pair_affinity")
-        for (a, b), lift in pair_lift.items():
-            conn.execute(
-                "INSERT INTO pair_affinity (num1, num2, lift, updated_at) VALUES (?,?,?,?)",
-                (a, b, lift, utc_now())
-            )
-        conn.commit()
-    reviewed = review_latest(conn)
-    if reviewed:
-        print(f"已自动复盘 {reviewed} 个预测。")
-    run_rolling_backtest(conn)
     conn.close()
 
 
 def cmd_predict(args: argparse.Namespace) -> None:
     conn = connect_db(args.db)
     init_db(conn)
-    draws = get_recent_draws(conn, 200)
-    specials = get_recent_specials(conn, 200)
-    if len(draws) < 20:
-        print("错误：历史数据不足，请先运行 sync。")
+    draws = get_recent_draws(conn, PREDICT_WINDOW)
+    specials = get_recent_specials(conn, PREDICT_WINDOW)
+    if len(draws) < 4:
+        print("错误：历史数据不足（至少需要4期），请先运行 sync。")
         return
     pair_lift = calculate_pair_lift(draws)
     latest = conn.execute("SELECT issue_no FROM draws ORDER BY draw_date DESC LIMIT 1").fetchone()
@@ -738,7 +670,7 @@ def cmd_predict(args: argparse.Namespace) -> None:
             VALUES (?, ?, ?, ?, ?, 'PENDING', ?)
         """, (next_issue, strat, json.dumps(score.main_picks), score.special_pick, score.confidence, utc_now()))
     conn.commit()
-    print(f"已生成 {next_issue} 期的预测推荐。")
+    print(f"已生成 {next_issue} 期的预测推荐（基于最近{len(draws)}期数据）。")
     conn.close()
 
 
@@ -761,7 +693,7 @@ def cmd_show(args: argparse.Namespace) -> None:
         "SELECT issue_no, strategy, numbers_json, special_number, confidence FROM predictions WHERE status='PENDING' ORDER BY strategy"
     ).fetchall()
     if pending:
-        print("\n本期多策略推荐 (6码池):")
+        print("\n本期多策略推荐 (6码池，基于最近7期):")
         for p in pending:
             nums = json.loads(p["numbers_json"])
             conf_str = f" (置信度: {p['confidence']*100:.1f}%)" if p["confidence"] else ""
@@ -770,62 +702,14 @@ def cmd_show(args: argparse.Namespace) -> None:
     else:
         print("\n暂无待开奖预测，请先运行 predict")
 
-    # ---------- 回测统计（全部历史） ----------
-    stats = conn.execute("SELECT * FROM backtest_stats ORDER BY sharpe_ratio DESC").fetchall()
-    if stats:
-        print("\n策略历史表现 (全部回测):")
-        for s in stats:
-            strategy_name = STRATEGY_CONFIGS.get(s['strategy'], {}).get('name', s['strategy'])
-            print(f"  {strategy_name}: 夏普比率={s['sharpe_ratio']:.2f} 平均命中={s['avg_hit']:.2f} ≥2码率={s['hit2_rate']*100:.1f}% 特别号率={s['special_rate']*100:.1f}%")
-
-    # ---------- 新增：最近7期策略表现 ----------
-    recent_7_rows = conn.execute("""
-        SELECT issue_no, numbers_json, special_number FROM draws 
-        ORDER BY draw_date DESC, issue_no DESC LIMIT 7
-    """).fetchall()
-    if len(recent_7_rows) >= 3:
-        print("\n最近7期策略表现 (滚动命中率):")
-        # 倒序恢复为正序（从旧到新）
-        recent_7 = list(reversed(recent_7_rows))
-        strat_recent_stats = {s: {"hits": [], "special_hits": 0} for s in STRATEGY_IDS}
-        for row in recent_7:
-            issue = row["issue_no"]
-            winning = set(json.loads(row["numbers_json"]))
-            winning_special = row["special_number"]
-            for s in STRATEGY_IDS:
-                pred = conn.execute("""
-                    SELECT numbers_json, special_number FROM predictions 
-                    WHERE issue_no = ? AND strategy = ? AND status = 'REVIEWED'
-                """, (issue, s)).fetchone()
-                if pred:
-                    picked = json.loads(pred["numbers_json"])
-                    hits = len([n for n in picked if n in winning])
-                    strat_recent_stats[s]["hits"].append(hits)
-                    if pred["special_number"] == winning_special:
-                        strat_recent_stats[s]["special_hits"] += 1
-                else:
-                    strat_recent_stats[s]["hits"].append(0)
-        print(f"  {'策略':<12} {'平均命中':<8} {'≥1码率':<8} {'≥2码率':<8} {'特别号命中':<8}")
-        print("  " + "-" * 50)
-        for s in STRATEGY_IDS:
-            hits = strat_recent_stats[s]["hits"]
-            if not hits:
-                continue
-            avg_hit = sum(hits) / len(hits)
-            hit1_rate = sum(1 for h in hits if h >= 1) / len(hits) * 100
-            hit2_rate = sum(1 for h in hits if h >= 2) / len(hits) * 100
-            special_hit = strat_recent_stats[s]["special_hits"]
-            strategy_name = STRATEGY_CONFIGS.get(s, {}).get('name', s)
-            print(f"  {strategy_name:<12} {avg_hit:<8.2f} {hit1_rate:<8.0f}% {hit2_rate:<8.0f}% {special_hit}/{len(hits)}")
-
     # ---------- 简洁投注推荐 ----------
     print("\n" + "=" * 60)
-    print("🎯 本期投注推荐单 (基于集成投票策略 & 动态权重)")
+    print("🎯 本期投注推荐单 (基于最近7期 + 动态权重)")
     print("=" * 60)
 
-    draws = get_recent_draws(conn, 100)
-    specials = get_recent_specials(conn, 100)
-    if len(draws) < 20:
+    draws = get_recent_draws(conn, PREDICT_WINDOW)
+    specials = get_recent_specials(conn, PREDICT_WINDOW)
+    if len(draws) < 4:
         print("历史数据不足，无法生成投注推荐。")
         conn.close()
         return
@@ -842,7 +726,7 @@ def cmd_show(args: argparse.Namespace) -> None:
         picked_6 = score.main_picks
         picked_special = score.special_pick
 
-    hot5 = picked_6[:5]
+    hot5 = picked_6[:5] if len(picked_6) >= 5 else picked_6
 
     zodiac_score = Counter()
     for draw in draws[-5:]:
@@ -857,6 +741,10 @@ def cmd_show(args: argparse.Namespace) -> None:
     special_zod = get_zodiac(picked_special)
 
     def zodiac_hit_rate(zod, limit=5):
+        if len(draws) < limit:
+            limit = len(draws)
+        if limit == 0:
+            return 0
         hits = 0
         for draw in draws[-limit:]:
             if any(n in ZODIAC_MAP[zod] for n in draw):
@@ -868,14 +756,14 @@ def cmd_show(args: argparse.Namespace) -> None:
 
     print(f"📅 参考期号: {pending[0]['issue_no'] if pending else next_issue_number(latest['issue_no'])}")
     print("-" * 60)
-    print(f"🐉 最强生肖: {top1}  (近5期命中率 {rate1:.0f}%)")
-    print(f"🐉 次强生肖: {top2}  (近5期命中率 {rate2:.0f}%)")
-    print("🎲 正码5个 (科学概率评估):")
+    print(f"🐉 最强生肖: {top1}  (近{min(5, len(draws))}期命中率 {rate1:.0f}%)")
+    print(f"🐉 次强生肖: {top2}  (近{min(5, len(draws))}期命中率 {rate2:.0f}%)")
+    print("🎲 正码5个 (科学概率评估，基于最近7期):")
 
     for n in hot5:
-        hits_30 = sum(1 for draw in draws[-30:] if n in draw)
-        low, high = wilson_interval(hits_30, 30)
-        posterior = bayesian_posterior(hits_30, 30)
+        hits_7 = sum(1 for draw in draws if n in draw)
+        low, high = wilson_interval(hits_7, len(draws))
+        posterior = bayesian_posterior(hits_7, len(draws))
         print(f"      {n:02d} ({get_zodiac(n)})  ─ 威尔逊区间 [{low:.0f}%-{high:.0f}%]  后验概率 {posterior:.1f}%")
 
     print(f"🔮 特别号 (首选): {picked_special:02d} ({special_zod})")
@@ -893,27 +781,28 @@ def cmd_show(args: argparse.Namespace) -> None:
         ranked = sorted(sc.items(), key=lambda x: x[1], reverse=True)
         for rank, (n, _) in enumerate(ranked):
             votes[n] += 49 - rank
-    max_vote = max(votes.values())
+    max_vote = max(votes.values()) if votes else 1
     norm_votes = {n: v / max_vote for n, v in votes.items()}
 
     markov = SpecialMarkovModel(2)
     markov.train(specials)
     special_exp = {n: 0.0 for n in ALL_NUMBERS}
-    for i, sp in enumerate(specials[-30:]):
-        weight = math.exp(-i / 6)
+    for i, sp in enumerate(specials):
+        weight = math.exp(-i / 2)
         special_exp[sp] += weight * 2.0
 
-    recent_specials = specials[-5:]
+    recent_specials = specials
     state = tuple(recent_specials[-2:]) if len(recent_specials) >= 2 else None
     markov_probs = {n: 0.0 for n in ALL_NUMBERS}
     if state and state in markov.transitions:
         total = sum(markov.transitions[state].values())
         for n, cnt in markov.transitions[state].items():
-            markov_probs[n] = cnt / total
+            markov_probs[n] = cnt / total if total > 0 else 0
 
+    max_exp = max(special_exp.values()) if special_exp.values() else 1
     for n in ALL_NUMBERS:
         special_scores[n] = (norm_votes[n] * 0.3 +
-                             (special_exp[n] / max(special_exp.values()) if max(special_exp.values()) > 0 else 0) * 0.4 +
+                             (special_exp[n] / max_exp) * 0.4 +
                              markov_probs[n] * 0.3)
 
     for n in hot5:
@@ -926,20 +815,21 @@ def cmd_show(args: argparse.Namespace) -> None:
         print(f"   {i}. {num:02d} ({get_zodiac(num)})  ─ 综合评分: {score*100:.1f}%")
 
     # ---------- 三中三推荐 ----------
-    print("\n🎰 三中三推荐 (从正码5个组合生成，共10组):")
-    three_combos = list(combinations(sorted(hot5), 3))
-    combo_hits = {}
-    for combo in three_combos:
-        hits = 0
-        for draw in draws[-30:]:
-            if all(n in draw for n in combo):
-                hits += 1
-        combo_hits[combo] = hits
-    for i, combo in enumerate(three_combos, 1):
-        hits = combo_hits[combo]
-        prob = hits / 30 * 100
-        combo_str = " ".join(f"{n:02d}({get_zodiac(n)})" for n in combo)
-        print(f"   {i:2d}. {combo_str}  ─ 近30期同时出现 {hits} 次 ({prob:.1f}%)")
+    if len(hot5) >= 3:
+        print("\n🎰 三中三推荐 (从正码5个组合生成，共10组):")
+        three_combos = list(combinations(sorted(hot5), 3))
+        combo_hits = {}
+        for combo in three_combos:
+            hits = 0
+            for draw in draws:
+                if all(n in draw for n in combo):
+                    hits += 1
+            combo_hits[combo] = hits
+        for i, combo in enumerate(three_combos, 1):
+            hits = combo_hits[combo]
+            prob = hits / len(draws) * 100 if draws else 0
+            combo_str = " ".join(f"{n:02d}({get_zodiac(n)})" for n in combo)
+            print(f"   {i:2d}. {combo_str}  ─ 近{len(draws)}期同时出现 {hits} 次 ({prob:.1f}%)")
 
     print("=" * 60)
     print("⚠️ 数据仅供参考，理性投注。")
@@ -948,16 +838,13 @@ def cmd_show(args: argparse.Namespace) -> None:
 
 
 def cmd_backtest(args: argparse.Namespace) -> None:
-    conn = connect_db(args.db)
-    init_db(conn)
-    print("正在运行滚动窗口回测...")
-    run_rolling_backtest(conn)
-    print("回测完成，统计结果已更新。")
-    conn.close()
+    print("回测功能需较长历史数据，当前7期模式不建议运行完整回测。")
+    print("如需回测，请使用完整版脚本。")
+    pass
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="新澳门六合彩终极科学版（含近7期统计）")
+    parser = argparse.ArgumentParser(description="新澳门六合彩 - 7期短窗口预测")
     parser.add_argument("--db", default=DB_PATH_DEFAULT, help="数据库路径")
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -965,13 +852,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_sync.add_argument("--year", type=int, default=datetime.now().year, help="指定年份")
     p_sync.set_defaults(func=cmd_sync)
 
-    p_predict = sub.add_parser("predict", help="生成下期预测")
+    p_predict = sub.add_parser("predict", help="生成下期预测（基于最近7期）")
     p_predict.set_defaults(func=cmd_predict)
 
     p_show = sub.add_parser("show", help="显示推荐和统计")
     p_show.set_defaults(func=cmd_show)
 
-    p_backtest = sub.add_parser("backtest", help="运行滚动回测")
+    p_backtest = sub.add_parser("backtest", help="回测（7期模式下不推荐）")
     p_backtest.set_defaults(func=cmd_backtest)
 
     return parser
