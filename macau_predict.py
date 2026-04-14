@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-新澳门六合彩 - 终极增强版（全自动在线数据 + 动态权重 + 蒙特卡洛）
+新澳门六合彩 - 内部分析强大 · 输出精简投注
 用法:
-    python macau_predict.py sync   # 从线上同步全年历史数据
-    python macau_predict.py show   # 显示本期智能推荐（默认）
-    python macau_predict.py auto   # 同步后显示推荐
+    python macau_bet.py sync   # 同步全年数据
+    python macau_bet.py show   # 显示投注推荐（默认）
+    python macau_bet.py auto   # 同步并显示
 """
 
 import argparse
@@ -16,8 +16,8 @@ import requests
 from collections import Counter, defaultdict
 from itertools import combinations
 from pathlib import Path
-from typing import List, Dict, Tuple, Set
 from datetime import datetime
+from typing import List, Dict, Tuple, Set
 
 # ---------- 配置 ----------
 ZODIAC_MAP = {
@@ -35,7 +35,7 @@ COLOR_MAP = {
 
 ALL_NUMBERS = list(range(1, 50))
 DATA_FILE = Path("macau_history.json")
-MAX_HISTORY = 300  # 保留最近300期用于分析
+MAX_HISTORY = 300
 history = []
 
 
@@ -52,7 +52,6 @@ def load_history() -> None:
 
 def save_history() -> None:
     global history
-    # 按期号排序并截断
     history.sort(key=lambda x: x["issue"])
     if len(history) > MAX_HISTORY:
         history = history[-MAX_HISTORY:]
@@ -62,7 +61,7 @@ def save_history() -> None:
 
 def fetch_new_macau_only() -> bool:
     """从线上历史接口批量获取当前年份的新澳门数据"""
-    year = datetime.now().year  # 自动使用当前年份（如2026）
+    year = datetime.now().year
     url = f"https://history.macaumarksix.com/history/macaujc2/y/{year}"
     print(f"🌐 正在从线上获取 {year} 年新澳门历史数据...")
 
@@ -116,7 +115,7 @@ def fetch_new_macau_only() -> bool:
         return False
 
 
-# ---------- 特征计算 ----------
+# ---------- 内部强大分析模块（冷热号、波色、大小单双、遗漏等） ----------
 def get_recent_draws(limit: int) -> List[List[int]]:
     recent = history[-limit:] if len(history) >= limit else history
     return [d["numbers"] for d in recent]
@@ -156,17 +155,36 @@ def calculate_omission(draws: List[List[int]]) -> Dict[int, int]:
     return om
 
 
+def get_color_trend(draws: List[List[int]], limit: int = 10) -> Counter:
+    recent = draws[-limit:] if len(draws) >= limit else draws
+    color_count = Counter()
+    for draw in recent:
+        for n in draw:
+            for c, nums in COLOR_MAP.items():
+                if n in nums:
+                    color_count[c] += 1
+    return color_count
+
+
+def get_odd_even_big_small(draws: List[List[int]]) -> Dict:
+    flat = [n for draw in draws[-10:] for n in draw]
+    odd = sum(1 for n in flat if n % 2 == 1)
+    big = sum(1 for n in flat if n >= 25)
+    return {
+        "odd": odd, "even": len(flat) - odd,
+        "big": big, "small": len(flat) - big
+    }
+
+
 def get_hot_pairs(draws: List[List[int]], top_n: int = 15) -> List[Tuple[Tuple[int, int], int]]:
-    """挖掘高频关联对（连号、同尾、同生肖）"""
     pair_count = Counter()
     for draw in draws[-50:]:
         for a, b in combinations(sorted(draw), 2):
             score = 1
             if abs(a - b) == 1:
-                score = 4  # 连号
+                score = 4
             elif a % 10 == b % 10:
-                score = 3  # 同尾
-            # 同生肖
+                score = 3
             for z, nums in ZODIAC_MAP.items():
                 if a in nums and b in nums:
                     score = max(score, 2)
@@ -175,9 +193,7 @@ def get_hot_pairs(draws: List[List[int]], top_n: int = 15) -> List[Tuple[Tuple[i
     return pair_count.most_common(top_n)
 
 
-# ---------- 动态权重优化 ----------
 def optimize_weights(draws: List[List[int]], specials: List[int], test_window: int = 40) -> Tuple[Dict[str, float], float]:
-    """网格搜索最优权重组合"""
     if len(draws) < test_window + 10:
         return {"hot": 0.4, "momentum": 0.4, "cold": 0.2}, 0.0
 
@@ -210,9 +226,7 @@ def optimize_weights(draws: List[List[int]], specials: List[int], test_window: i
     return best_weights, best_score
 
 
-# ---------- 核心选号引擎 ----------
 def smart_filter(nums: List[int]) -> bool:
-    """过滤不合理组合"""
     if len(nums) != 6:
         return False
     s = sorted(nums)
@@ -227,7 +241,6 @@ def smart_filter(nums: List[int]) -> bool:
     if big == 0 or big == 6:
         return False
 
-    # 连号不超过3连
     consec = 1
     max_consec = 1
     for i in range(1, 6):
@@ -239,12 +252,10 @@ def smart_filter(nums: List[int]) -> bool:
     if max_consec > 3:
         return False
 
-    # 同尾不超过2个
     tails = [n % 10 for n in s]
     if max(Counter(tails).values()) > 2:
         return False
 
-    # 同区间不超过3个
     zones = [(n - 1) // 10 for n in s]
     if max(Counter(zones).values()) > 3:
         return False
@@ -256,7 +267,6 @@ def monte_carlo_pick(scores: Dict[int, float],
                      pair_bonus: Dict[Tuple[int, int], float],
                      omission: Dict[int, int],
                      trials: int = 2000) -> List[int]:
-    """蒙特卡洛模拟选最优6码组合"""
     ranked = sorted(scores.items(), key=lambda x: x[1], reverse=True)[:35]
     candidates = [n for n, _ in ranked]
 
@@ -270,12 +280,10 @@ def monte_carlo_pick(scores: Dict[int, float],
 
         total = sum(scores[n] for n in combo)
 
-        # 关联对加分
         for a, b in combinations(combo, 2):
             total += pair_bonus.get((a, b), 0)
             total += pair_bonus.get((b, a), 0)
 
-        # 遗漏加分：15-25期额外加
         for n in combo:
             omit = omission.get(n, 0)
             if 15 <= omit <= 25:
@@ -301,7 +309,6 @@ def ensemble_vote_core(draws: List[List[int]],
                        specials: List[int],
                        weights: Tuple[float, float, float] = (0.4, 0.4, 0.2),
                        use_monte_carlo: bool = True) -> Tuple[List[int], int]:
-    """核心集成投票"""
     w_hot, w_mom, w_cold = weights
 
     hot_scores = calculate_frequency(draws[-40:]) if len(draws) >= 40 else calculate_frequency(draws)
@@ -341,7 +348,6 @@ def ensemble_vote_core(draws: List[List[int]],
                 picked.append(n)
         picked = sorted(picked)
 
-    # 特别号
     special_scores = {n: 0.0 for n in ALL_NUMBERS}
     for i in range(min(40, len(draws))):
         weight = math.exp(-i / 8)
@@ -364,12 +370,9 @@ def ensemble_vote_core(draws: List[List[int]],
     return picked, special
 
 
-# ---------- 预测展示 ----------
+# ---------- 精简投注输出 ----------
 def show_prediction() -> None:
     load_history()
-    print("\n" + "=" * 85)
-    print("🎯 新澳门六合彩 - 终极增强版 (动态权重 + 蒙特卡洛)")
-    print("=" * 85)
 
     if len(history) < 30:
         print("⚠️ 历史数据不足（至少30期），请先运行 sync 获取数据。")
@@ -379,56 +382,79 @@ def show_prediction() -> None:
     specials = [d["special"] for d in history]
     latest = history[-1]
 
-    print("⚙️ 正在优化权重...")
+    # 内部优化权重
     best_w, avg_hit = optimize_weights(draws, specials)
-    print(f"📈 最优权重: 热号{best_w['hot']:.2f} 动量{best_w['momentum']:.2f} 冷号{best_w['cold']:.2f}")
-    print(f"   近40期回测平均命中: {avg_hit:.2f} 码")
-
     weights_tuple = (best_w['hot'], best_w['momentum'], best_w['cold'])
-    picked_nums, picked_special = ensemble_vote_core(draws, specials, weights=weights_tuple, use_monte_carlo=True)
+    picked_6, picked_special = ensemble_vote_core(draws, specials, weights=weights_tuple, use_monte_carlo=True)
 
-    print("\n" + "=" * 85)
-    print("🎲 本期智能推荐")
-    print("=" * 85)
-    print(f"📅 最新开奖参考: 第 {latest['issue']} 期")
-    print(f"   正码: {' '.join(f'{n:02d}' for n in latest['numbers'])}  特别号: {latest['special']:02d}\n")
-
-    print(f"🌟 正码 6 码: {' '.join(f'{n:02d}' for n in picked_nums)}")
-    print(f"🔮 特别号: {picked_special:02d}")
-
-    hot_counter = calculate_frequency(draws[-30:])
-    hot6 = [n for n, _ in sorted(hot_counter.items(), key=lambda x: x[1], reverse=True)[:6]]
+    # 精选5个正码（从6个中去掉一个相对最弱的，保留前5）
+    # 这里使用内部得分排序，选出得分最高的5个
+    hot_scores = calculate_frequency(draws[-40:])
+    mom_scores = calculate_momentum(draws)
     omission = calculate_omission(draws)
-    cold5 = [n for n, omit in sorted(omission.items(), key=lambda x: x[1], reverse=True)[:5]]
+    cold_scores = {n: omission[n] / max(1, len(draws)) for n in ALL_NUMBERS}
+    def normalize(d): 
+        vals = list(d.values()); mn, mx = min(vals), max(vals); return {k: (v-mn)/(mx-mn) if mx!=mn else 0.0 for k,v in d.items()}
+    hot_n = normalize(hot_scores); mom_n = normalize(mom_scores); cold_n = normalize(cold_scores)
+    final_scores = {n: hot_n[n]*best_w['hot'] + mom_n[n]*best_w['momentum'] + cold_n[n]*best_w['cold'] for n in ALL_NUMBERS}
+    sorted_6 = sorted(picked_6, key=lambda n: final_scores[n], reverse=True)
+    hot5 = sorted_6[:5]
 
-    print("\n📊 冷热号参考")
-    print(f"   🔥 热号(近30期): {' '.join(f'{n:02d}' for n in hot6)}")
-    print(f"   ❄️ 冷号(遗漏最长): {' '.join(f'{n:02d}' for n in cold5)}")
-
-    zodiac_counter = Counter()
-    for draw in draws[-5:]:
+    # 最强/次强生肖（基于近期正码加权）
+    zodiac_score = Counter()
+    for i, draw in enumerate(draws[-8:]):
+        weight = math.exp(-i / 3)
         for n in draw:
             for z, nums in ZODIAC_MAP.items():
                 if n in nums:
-                    zodiac_counter[z] += 1
-    top_zod = zodiac_counter.most_common(3)
-    print(f"\n🐉 热门生肖: {' > '.join([z for z, _ in top_zod])}")
+                    zodiac_score[z] += weight
+    top_zod = zodiac_score.most_common(2)
+    top1 = top_zod[0][0] if top_zod else "龙"
+    top2 = top_zod[1][0] if len(top_zod) > 1 else "马"
 
-    hot_pairs = get_hot_pairs(draws, top_n=5)
-    print("\n🔗 近期高频关联对 (供连码参考):")
-    for (a, b), score in hot_pairs:
-        print(f"   {a:02d}-{b:02d} (热度: {score})")
+    # 特别号生肖
+    special_zod = "龙"
+    for z, nums in ZODIAC_MAP.items():
+        if picked_special in nums:
+            special_zod = z
+            break
 
-    print("\n" + "=" * 85)
-    print("⚠️ 理性提醒：以上分析基于历史统计，仅供娱乐参考。")
-    print("=" * 85)
+    # 生肖近期命中率（近8期）
+    def zodiac_hit_rate(zod, draws, limit=8):
+        hits = 0
+        for draw in draws[-limit:]:
+            if any(n in ZODIAC_MAP[zod] for n in draw):
+                hits += 1
+        return hits / limit * 100
+
+    rate1 = zodiac_hit_rate(top1, draws)
+    rate2 = zodiac_hit_rate(top2, draws)
+
+    # 生成三中三组合（从5个号码中选3个，共10组）
+    three_combos = list(combinations(sorted(hot5), 3))
+
+    # 输出精简投注单
+    print("\n" + "=" * 50)
+    print("🎯 新澳门六合彩 · 投注推荐单")
+    print("=" * 50)
+    print(f"📅 参考期号: {latest['issue']}")
+    print("-" * 50)
+    print(f"🐉 最强生肖: {top1}  (近8期命中率 {rate1:.0f}%)")
+    print(f"🐉 次强生肖: {top2}  (近8期命中率 {rate2:.0f}%)")
+    print(f"🎲 正码5个: {' '.join(f'{n:02d}' for n in hot5)}")
+    print(f"🔮 特别号生肖: {special_zod}")
+    print("-" * 50)
+    print("🎰 三中三组合 (共10组):")
+    for i, combo in enumerate(three_combos, 1):
+        print(f"   {i:2d}. {' '.join(f'{n:02d}' for n in combo)}")
+    print("=" * 50)
+    print("⚠️ 数据仅供参考，理性投注。\n")
 
 
 # ---------- 主程序 ----------
 def main():
-    parser = argparse.ArgumentParser(description="新澳门六合彩预测工具（终极增强版）")
-    parser.add_argument("cmd", choices=["sync", "show", "auto"], nargs="?", default="show",
-                        help="sync:同步数据, show:显示推荐, auto:同步后显示")
+    parser = argparse.ArgumentParser(description="新澳门六合彩-内部分析强大/输出精简")
+    parser.add_argument("cmd", choices=["sync", "show", "auto"], nargs="?", default="show")
     args = parser.parse_args()
 
     if args.cmd == "sync":
