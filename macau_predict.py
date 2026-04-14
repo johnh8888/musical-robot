@@ -1,20 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-新澳门六合彩 - 终极科学版
-功能：
-- 动态权重网格搜索 (每期自适应)
-- 威尔逊置信区间 + 贝叶斯后验概率
-- 蒙特卡洛稳定性增强 (固定种子5000次)
-- 特别号6码综合推荐 (独立马尔可夫链)
-- 多数据源交叉验证 (新澳门专用)
-- 滚动回测 + 夏普比率评估
-
+新澳门六合彩 - 终极科学版（含三中三推荐 + 近7期统计）
 用法:
-    python macau_ultimate.py sync
-    python macau_ultimate.py predict
-    python macau_ultimate.py show
-    python macau_ultimate.py backtest
+    python macau_predict.py sync --year 2026
+    python macau_predict.py predict
+    python macau_predict.py show
+    python macau_predict.py backtest
 """
 
 import argparse
@@ -22,15 +14,15 @@ import json
 import logging
 import math
 import random
-import re
 import sqlite3
-import requests
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from itertools import combinations
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Tuple
+
+import requests
 
 # -------------------- 日志系统 --------------------
 logging.basicConfig(
@@ -44,12 +36,8 @@ logger = logging.getLogger("macau_ultimate")
 SCRIPT_DIR = Path(__file__).resolve().parent
 DB_PATH_DEFAULT = str(SCRIPT_DIR / "macau_ultimate.db")
 
-# 新澳门数据接口
+# 新澳门历史数据接口
 MACAU_HISTORY_URL = "https://history.macaumarksix.com/history/macaujc2/y/{}"
-THIRD_PARTY_URLS_DEFAULT = [
-    "https://marksix6.net/index.php?api=1",  # 包含澳门数据，需过滤
-]
-THIRD_PARTY_MAX_PAGES_DEFAULT = 1  # marksix6.net 单页即可
 
 # 策略配置
 STRATEGY_CONFIGS = {
@@ -78,7 +66,7 @@ ZODIAC_MAP = {
     "蛇": [2, 14, 26, 38],
 }
 
-# 波色映射
+# 波色映射（用于过滤）
 COLOR_MAP = {
     "红": [1,2,7,8,12,13,18,19,23,24,29,30,34,35,40,45,46],
     "蓝": [3,4,9,10,14,15,20,21,25,26,31,32,36,37,41,42,47,48],
@@ -113,11 +101,9 @@ def utc_now() -> str:
 
 
 def parse_issue(issue_no: str) -> Optional[Tuple[str, int, int]]:
-    """解析期号，支持 '2026103' 或 '2026/103'"""
     if "/" in issue_no:
         parts = issue_no.split("/")
     else:
-        # 无分隔符：前4位年份，后3位期号
         if len(issue_no) >= 7:
             parts = [issue_no[:4], issue_no[4:]]
         else:
@@ -135,7 +121,7 @@ def next_issue_number(issue: str) -> str:
     if not parsed:
         return issue
     year, seq, width = parsed
-    return f"{year}{str(seq + 1).zfill(width)}"  # 新澳门格式：2026104
+    return f"{year}{str(seq + 1).zfill(width)}"
 
 
 def get_zodiac(num: int) -> str:
@@ -265,106 +251,41 @@ def upsert_draw(conn: sqlite3.Connection, record: DrawRecord, source: str) -> st
 
 
 # -------------------- 数据获取（新澳门专用） --------------------
-def fetch_from_url(url: str, timeout: int = 20) -> Optional[str]:
+def fetch_macau_history(year: int) -> List[DrawRecord]:
+    url = MACAU_HISTORY_URL.format(year)
+    logger.info(f"正在获取 {year} 年新澳门数据...")
     try:
-        resp = requests.get(url, timeout=timeout, headers={"User-Agent": "Mozilla/5.0"})
-        if resp.status_code == 200:
-            return resp.text
-        logger.warning(f"获取失败 {url}: HTTP {resp.status_code}")
-        return None
+        resp = requests.get(url, timeout=30, headers={"User-Agent": "Mozilla/5.0"})
+        if resp.status_code != 200:
+            logger.error(f"请求失败: HTTP {resp.status_code}")
+            return []
+        data = resp.json()
+        if data.get("code") != 200 or not data.get("data"):
+            logger.error("接口返回错误或数据为空")
+            return []
+        records = []
+        for item in data["data"]:
+            issue = str(item.get("expect", "")).strip()
+            open_code = item.get("openCode", "")
+            open_time = item.get("openTime", "")
+            if not issue or not open_code:
+                continue
+            nums = [int(x) for x in open_code.split(",") if x.strip().isdigit()]
+            if len(nums) >= 7:
+                records.append(DrawRecord(
+                    issue_no=issue,
+                    draw_date=open_time[:10] if open_time else "",
+                    numbers=nums[:6],
+                    special_number=nums[6]
+                ))
+        logger.info(f"获取到 {len(records)} 条记录")
+        return records
     except Exception as e:
-        logger.warning(f"获取异常 {url}: {e}")
-        return None
+        logger.error(f"获取数据异常: {e}")
+        return []
 
 
-def parse_macau_history_json(text: str) -> List[DrawRecord]:
-    """解析新澳门历史接口 (history.macaumarksix.com)"""
-    data = json.loads(text)
-    records = []
-    for item in data.get("data", []):
-        issue = str(item.get("expect", "")).strip()
-        open_code = item.get("openCode", "")
-        open_time = item.get("openTime", "")
-        if not issue or not open_code:
-            continue
-        nums = [int(x) for x in open_code.split(",") if x.strip().isdigit()]
-        if len(nums) >= 7:
-            records.append(DrawRecord(
-                issue_no=issue,
-                draw_date=open_time[:10] if open_time else "",
-                numbers=nums[:6],
-                special_number=nums[6]
-            ))
-    return records
-
-
-def parse_marksix6_for_macau(text: str) -> List[DrawRecord]:
-    """从 marksix6.net 的 API 中过滤出新澳门数据"""
-    data = json.loads(text)
-    records = []
-    for item in data.get("lottery_data", []):
-        name = str(item.get("name", ""))
-        # 过滤：包含“澳门”且不包含“老”
-        if "澳门" not in name or "老" in name:
-            continue
-        issue = str(item.get("expect", "")).strip()
-        open_code = item.get("openCode", "")
-        open_time = item.get("openTime", "")
-        if not issue or not open_code:
-            continue
-        nums = [int(x) for x in open_code.split(",") if x.strip().isdigit()]
-        if len(nums) >= 7:
-            records.append(DrawRecord(
-                issue_no=issue,
-                draw_date=open_time[:10] if open_time else "",
-                numbers=nums[:6],
-                special_number=nums[6]
-            ))
-    return records
-
-
-def fetch_all_sources(current_year: int = None) -> List[DrawRecord]:
-    """从新澳门历史接口和第三方源交叉验证获取数据"""
-    if current_year is None:
-        current_year = datetime.now().year
-
-    all_records: Dict[str, List[DrawRecord]] = defaultdict(list)
-
-    # 1. 新澳门官方历史接口（按年份）
-    url = MACAU_HISTORY_URL.format(current_year)
-    text = fetch_from_url(url)
-    if text:
-        records = parse_macau_history_json(text)
-        for r in records:
-            all_records[r.issue_no].append(r)
-        logger.info(f"历史接口获取 {len(records)} 条记录")
-
-    # 2. marksix6.net 第三方源（作为交叉验证）
-    for url in THIRD_PARTY_URLS_DEFAULT:
-        text = fetch_from_url(url)
-        if text:
-            records = parse_marksix6_for_macau(text)
-            for r in records:
-                all_records[r.issue_no].append(r)
-            logger.info(f"第三方源获取 {len(records)} 条记录")
-
-    # 交叉验证：取多数一致的记录
-    final_records = []
-    for issue, variants in all_records.items():
-        if len(variants) >= 2:
-            counts = Counter(tuple(v.numbers) + (v.special_number,) for v in variants)
-            most = counts.most_common(1)[0][0]
-            if counts[most] >= 2:
-                base = variants[0]
-                final_records.append(DrawRecord(issue, base.draw_date, list(most[:-1]), most[-1]))
-        elif len(variants) == 1:
-            final_records.append(variants[0])
-
-    logger.info(f"交叉验证后保留 {len(final_records)} 条有效记录")
-    return final_records
-
-
-def sync_draws(conn: sqlite3.Connection, records: List[DrawRecord], source: str = "auto") -> Tuple[int, int]:
+def sync_draws(conn: sqlite3.Connection, records: List[DrawRecord], source: str = "online") -> Tuple[int, int]:
     inserted = updated = 0
     for r in records:
         res = upsert_draw(conn, r, source)
@@ -775,8 +696,8 @@ def bayesian_posterior(hits: int, total: int) -> float:
 def cmd_sync(args: argparse.Namespace) -> None:
     conn = connect_db(args.db)
     init_db(conn)
-    print("正在从新澳门数据源同步历史开奖数据...")
-    records = fetch_all_sources(args.year)
+    print(f"正在从新澳门数据源同步 {args.year} 年历史开奖数据...")
+    records = fetch_macau_history(args.year)
     if not records:
         print("错误：未获取到有效记录。")
         return
@@ -825,7 +746,7 @@ def cmd_show(args: argparse.Namespace) -> None:
     conn = connect_db(args.db)
     init_db(conn)
 
-    # 最新开奖
+    # ---------- 最新开奖 ----------
     latest = conn.execute(
         "SELECT issue_no, draw_date, numbers_json, special_number FROM draws ORDER BY draw_date DESC LIMIT 1"
     ).fetchone()
@@ -835,7 +756,7 @@ def cmd_show(args: argparse.Namespace) -> None:
     else:
         print("暂无开奖数据。")
 
-    # 多策略推荐
+    # ---------- 多策略推荐 ----------
     pending = conn.execute(
         "SELECT issue_no, strategy, numbers_json, special_number, confidence FROM predictions WHERE status='PENDING' ORDER BY strategy"
     ).fetchall()
@@ -849,15 +770,55 @@ def cmd_show(args: argparse.Namespace) -> None:
     else:
         print("\n暂无待开奖预测，请先运行 predict")
 
-    # 回测统计
+    # ---------- 回测统计（全部历史） ----------
     stats = conn.execute("SELECT * FROM backtest_stats ORDER BY sharpe_ratio DESC").fetchall()
     if stats:
-        print("\n策略历史表现 (回测):")
+        print("\n策略历史表现 (全部回测):")
         for s in stats:
             strategy_name = STRATEGY_CONFIGS.get(s['strategy'], {}).get('name', s['strategy'])
             print(f"  {strategy_name}: 夏普比率={s['sharpe_ratio']:.2f} 平均命中={s['avg_hit']:.2f} ≥2码率={s['hit2_rate']*100:.1f}% 特别号率={s['special_rate']*100:.1f}%")
 
-    # 简洁投注推荐
+    # ---------- 新增：最近7期策略表现 ----------
+    recent_7_rows = conn.execute("""
+        SELECT issue_no, numbers_json, special_number FROM draws 
+        ORDER BY draw_date DESC, issue_no DESC LIMIT 7
+    """).fetchall()
+    if len(recent_7_rows) >= 3:
+        print("\n最近7期策略表现 (滚动命中率):")
+        # 倒序恢复为正序（从旧到新）
+        recent_7 = list(reversed(recent_7_rows))
+        strat_recent_stats = {s: {"hits": [], "special_hits": 0} for s in STRATEGY_IDS}
+        for row in recent_7:
+            issue = row["issue_no"]
+            winning = set(json.loads(row["numbers_json"]))
+            winning_special = row["special_number"]
+            for s in STRATEGY_IDS:
+                pred = conn.execute("""
+                    SELECT numbers_json, special_number FROM predictions 
+                    WHERE issue_no = ? AND strategy = ? AND status = 'REVIEWED'
+                """, (issue, s)).fetchone()
+                if pred:
+                    picked = json.loads(pred["numbers_json"])
+                    hits = len([n for n in picked if n in winning])
+                    strat_recent_stats[s]["hits"].append(hits)
+                    if pred["special_number"] == winning_special:
+                        strat_recent_stats[s]["special_hits"] += 1
+                else:
+                    strat_recent_stats[s]["hits"].append(0)
+        print(f"  {'策略':<12} {'平均命中':<8} {'≥1码率':<8} {'≥2码率':<8} {'特别号命中':<8}")
+        print("  " + "-" * 50)
+        for s in STRATEGY_IDS:
+            hits = strat_recent_stats[s]["hits"]
+            if not hits:
+                continue
+            avg_hit = sum(hits) / len(hits)
+            hit1_rate = sum(1 for h in hits if h >= 1) / len(hits) * 100
+            hit2_rate = sum(1 for h in hits if h >= 2) / len(hits) * 100
+            special_hit = strat_recent_stats[s]["special_hits"]
+            strategy_name = STRATEGY_CONFIGS.get(s, {}).get('name', s)
+            print(f"  {strategy_name:<12} {avg_hit:<8.2f} {hit1_rate:<8.0f}% {hit2_rate:<8.0f}% {special_hit}/{len(hits)}")
+
+    # ---------- 简洁投注推荐 ----------
     print("\n" + "=" * 60)
     print("🎯 本期投注推荐单 (基于集成投票策略 & 动态权重)")
     print("=" * 60)
@@ -919,7 +880,7 @@ def cmd_show(args: argparse.Namespace) -> None:
 
     print(f"🔮 特别号 (首选): {picked_special:02d} ({special_zod})")
 
-    # 特别号6码推荐
+    # ---------- 特别号6码推荐 ----------
     pair_lift = calculate_pair_lift(draws)
     scores_list = []
     for s in ["hot", "cold", "momentum", "balanced", "pattern"]:
@@ -964,6 +925,22 @@ def cmd_show(args: argparse.Namespace) -> None:
     for i, (num, score) in enumerate(top6_specials, 1):
         print(f"   {i}. {num:02d} ({get_zodiac(num)})  ─ 综合评分: {score*100:.1f}%")
 
+    # ---------- 三中三推荐 ----------
+    print("\n🎰 三中三推荐 (从正码5个组合生成，共10组):")
+    three_combos = list(combinations(sorted(hot5), 3))
+    combo_hits = {}
+    for combo in three_combos:
+        hits = 0
+        for draw in draws[-30:]:
+            if all(n in draw for n in combo):
+                hits += 1
+        combo_hits[combo] = hits
+    for i, combo in enumerate(three_combos, 1):
+        hits = combo_hits[combo]
+        prob = hits / 30 * 100
+        combo_str = " ".join(f"{n:02d}({get_zodiac(n)})" for n in combo)
+        print(f"   {i:2d}. {combo_str}  ─ 近30期同时出现 {hits} 次 ({prob:.1f}%)")
+
     print("=" * 60)
     print("⚠️ 数据仅供参考，理性投注。")
 
@@ -980,7 +957,7 @@ def cmd_backtest(args: argparse.Namespace) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="新澳门六合彩终极科学版")
+    parser = argparse.ArgumentParser(description="新澳门六合彩终极科学版（含近7期统计）")
     parser.add_argument("--db", default=DB_PATH_DEFAULT, help="数据库路径")
     sub = parser.add_subparsers(dest="command", required=True)
 
