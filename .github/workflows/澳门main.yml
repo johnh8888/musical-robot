@@ -25,5 +25,7 @@ jobs:
       - name: 生成预测
         run: python macau_predict.py predict
       
-      - name: 显示推荐
+      - name: 显示推荐并推送到微信
+        env:
+          PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
         run: python macau_predict.py show
