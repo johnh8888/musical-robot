@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-新澳门六合彩 - 终极科学版（7期数据 + 动态权重 + PushPlus微信推送）
+新澳门六合彩 - 终极科学版（7期数据 + 动态权重 + PushPlus详细推送）
 用法:
     python macau_predict.py sync --year 2026
     python macau_predict.py predict
@@ -638,7 +638,7 @@ def bayesian_posterior(hits: int, total: int) -> float:
     return (hits + 1) / (total + 49) * 100
 
 
-# -------------------- PushPlus 微信推送 --------------------
+# -------------------- PushPlus 微信推送（详细版）--------------------
 def send_pushplus_notification(title: str, content: str) -> bool:
     """使用 PushPlus 发送微信消息"""
     token = os.environ.get("PUSHPLUS_TOKEN", "")
@@ -840,36 +840,40 @@ def cmd_show(args: argparse.Namespace) -> None:
     top6_specials = sorted(special_scores.items(), key=lambda x: x[1], reverse=True)[:6]
 
     print("\n🔯 特别号6码推荐 (按综合评分排序):")
+    special_lines = []
     for i, (num, score) in enumerate(top6_specials, 1):
-        print(f"   {i}. {num:02d} ({get_zodiac(num)})  ─ 综合评分: {score*100:.1f}%")
+        line = f"   {i}. {num:02d} ({get_zodiac(num)})  ─ 综合评分: {score*100:.1f}%"
+        print(line)
+        special_lines.append(line.strip())
 
     # ---------- 三中三推荐 ----------
     best_combo = None
+    combo_hits_dict = {}
     if len(hot5) >= 3:
         print("\n🎰 三中三推荐 (从正码5个组合生成，共10组):")
         three_combos = list(combinations(sorted(hot5), 3))
-        combo_hits = {}
         for combo in three_combos:
             hits = 0
             for draw in draws:
                 if all(n in draw for n in combo):
                     hits += 1
-            combo_hits[combo] = hits
+            combo_hits_dict[combo] = hits
         for i, combo in enumerate(three_combos, 1):
-            hits = combo_hits[combo]
+            hits = combo_hits_dict[combo]
             prob = hits / len(draws) * 100 if draws else 0
             combo_str = " ".join(f"{n:02d}({get_zodiac(n)})" for n in combo)
             print(f"   {i:2d}. {combo_str}  ─ 近{len(draws)}期同时出现 {hits} 次 ({prob:.1f}%)")
 
-        if combo_hits:
-            best_combo = max(three_combos, key=lambda c: (combo_hits[c], -three_combos.index(c)))
-            best_hits = combo_hits[best_combo]
+        if combo_hits_dict:
+            best_combo = max(three_combos, key=lambda c: (combo_hits_dict[c], -three_combos.index(c)))
+            best_hits = combo_hits_dict[best_combo]
             best_prob = best_hits / len(draws) * 100 if draws else 0
             best_combo_str = " ".join(f"{n:02d}({get_zodiac(n)})" for n in best_combo)
             print(f"\n🏆 极强推荐组合: {best_combo_str}")
             print(f"   近{len(draws)}期同时出现 {best_hits} 次 ({best_prob:.1f}%)，是近期最稳定的三码组合。")
 
     # ---------- 最近7期特别号策略命中统计 ----------
+    strat_stats_summary = []
     recent_7_rows = conn.execute("""
         SELECT issue_no, special_number FROM draws 
         ORDER BY draw_date DESC, issue_no DESC LIMIT 7
@@ -900,21 +904,45 @@ def cmd_show(args: argparse.Namespace) -> None:
             hits = stats["hits"]
             rate = hits / total * 100
             strategy_name = STRATEGY_CONFIGS.get(s, {}).get('name', s)
-            print(f"  {strategy_name:<12} {hits}/{total:<6} {rate:.0f}%")
+            line = f"  {strategy_name:<12} {hits}/{total:<6} {rate:.0f}%"
+            print(line)
+            strat_stats_summary.append(f"{strategy_name}:{hits}/{total}({rate:.0f}%)")
     else:
         print("\n最近7期数据不足，无法显示特别号命中统计。")
 
     print("=" * 60)
     print("⚠️ 数据仅供参考，理性投注。")
 
-    # ---------- 构建微信推送消息 ----------
+    # ---------- 构建微信推送消息（详细版）----------
     push_lines = []
     push_lines.append(f"【新澳门预测】{next_issue_str}")
+    push_lines.append("")
     push_lines.append(f"🐉 最强生肖: {top1} ({rate1:.0f}%)  次强: {top2} ({rate2:.0f}%)")
-    push_lines.append(f"🎲 正码5个: {' '.join(f'{n:02d}' for n in hot5)}")
+    push_lines.append("")
+    push_lines.append("🎲 正码5个 (威尔逊区间 / 后验概率):")
+    for n in hot5:
+        hits_7 = sum(1 for draw in draws if n in draw)
+        low, high = wilson_interval(hits_7, len(draws))
+        posterior = bayesian_posterior(hits_7, len(draws))
+        push_lines.append(f"   {n:02d} ({get_zodiac(n)})  [{low:.0f}%-{high:.0f}%]  {posterior:.1f}%")
+    push_lines.append("")
     push_lines.append(f"🔮 特别号首选: {picked_special:02d} ({special_zod})")
+    push_lines.append("")
+    if special_lines:
+        push_lines.append("🔯 特别号6码排名:")
+        for line in special_lines[:6]:
+            push_lines.append(line)
+    push_lines.append("")
     if best_combo:
+        best_hits = combo_hits_dict[best_combo]
+        best_prob = best_hits / len(draws) * 100 if draws else 0
         push_lines.append(f"🏆 极强三中三: {' '.join(f'{n:02d}' for n in best_combo)}")
+        push_lines.append(f"   近{len(draws)}期同时出现 {best_hits} 次 ({best_prob:.1f}%)")
+    push_lines.append("")
+    if strat_stats_summary:
+        push_lines.append("📊 最近7期特别号命中率:")
+        for summary in strat_stats_summary:
+            push_lines.append(f"   {summary}")
 
     push_content = "\n".join(push_lines)
     send_pushplus_notification("新澳门六合彩预测", push_content)
