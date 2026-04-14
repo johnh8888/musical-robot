@@ -1,14 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-新澳门六合彩 - 定制投注版
-输出内容：
-    - 上期开奖记录
-    - 最强/次强生肖（近5期统计）
-    - 正码5个（带生肖）
-    - 特别号生肖
-    - 三中三组合（带生肖）
-用法：
+新澳门六合彩 - 最终完整版（正码5个命中分析基于近6期）
+用法:
     python macau_bet.py sync
     python macau_bet.py show
     python macau_bet.py auto
@@ -17,10 +11,8 @@
 import argparse
 import json
 import math
-import random
 import requests
 from collections import Counter
-from itertools import combinations
 from pathlib import Path
 from datetime import datetime
 from typing import List, Dict, Tuple
@@ -39,7 +31,6 @@ MAX_HISTORY = 300
 history = []
 
 
-# ---------- 辅助函数：号码查生肖 ----------
 def get_zodiac(num: int) -> str:
     for z, nums in ZODIAC_MAP.items():
         if num in nums:
@@ -122,7 +113,7 @@ def fetch_new_macau_only() -> bool:
         return False
 
 
-# ---------- 核心算法（精简高效） ----------
+# ---------- 核心算法 ----------
 def get_recent_draws(limit: int) -> List[List[int]]:
     recent = history[-limit:] if len(history) >= limit else history
     return [d["numbers"] for d in recent]
@@ -221,7 +212,6 @@ def ensemble_vote_core(draws: List[List[int]],
                            mom_norm[n] * w_mom +
                            cold_norm[n] * w_cold)
 
-    # 贪心选6码（兼顾冷热均衡，避免极端）
     ranked = sorted(final_scores.items(), key=lambda x: x[1], reverse=True)
     picked = []
     for n, _ in ranked:
@@ -230,7 +220,6 @@ def ensemble_vote_core(draws: List[List[int]],
         if n not in picked:
             picked.append(n)
 
-    # 特别号
     special_scores = {n: 0.0 for n in ALL_NUMBERS}
     for i in range(min(40, len(draws))):
         weight = math.exp(-i / 8)
@@ -243,7 +232,6 @@ def ensemble_vote_core(draws: List[List[int]],
         special_scores[n] = -1e9
     special = max(special_scores, key=lambda n: special_scores[n])
 
-    # 确保正码不含特别号
     picked = [n for n in picked if n != special]
     while len(picked) < 6:
         for n, _ in sorted(final_scores.items(), key=lambda x: x[1], reverse=True):
@@ -254,7 +242,36 @@ def ensemble_vote_core(draws: List[List[int]],
     return picked, special
 
 
-# ---------- 输出展示（完全定制） ----------
+def analyze_hit_expectation(hot5: List[int], draws: List[List[int]], backtest_games: int = 6) -> Dict:
+    """
+    基于最近 backtest_games 期数据，统计如果每期都买这5个号码，平均能中几个。
+    """
+    if len(draws) < backtest_games:
+        backtest_games = len(draws)
+
+    total_hits = 0
+    hit_counts = []
+    for draw in draws[-backtest_games:]:
+        hits = len(set(hot5) & set(draw))
+        hit_counts.append(hits)
+        total_hits += hits
+
+    avg_hits = total_hits / backtest_games if backtest_games > 0 else 0
+    at_least_one = sum(1 for h in hit_counts if h >= 1) / backtest_games * 100 if backtest_games > 0 else 0
+
+    single_probs = {}
+    for n in hot5:
+        hits = sum(1 for draw in draws[-backtest_games:] if n in draw)
+        single_probs[n] = hits / backtest_games * 100 if backtest_games > 0 else 0
+
+    return {
+        "avg_hits": avg_hits,
+        "at_least_one": at_least_one,
+        "single_probs": single_probs
+    }
+
+
+# ---------- 输出展示 ----------
 def show_prediction() -> None:
     load_history()
 
@@ -307,10 +324,8 @@ def show_prediction() -> None:
     top1 = top_zod[0][0] if top_zod else "龙"
     top2 = top_zod[1][0] if len(top_zod) > 1 else "马"
 
-    # 特别号生肖
     special_zod = get_zodiac(picked_special)
 
-    # 近期命中率（近5期）
     def zodiac_hit_rate(zod, draws, limit=5):
         hits = 0
         for draw in draws[-limit:]:
@@ -321,6 +336,9 @@ def show_prediction() -> None:
     rate1 = zodiac_hit_rate(top1, draws)
     rate2 = zodiac_hit_rate(top2, draws)
 
+    # 命中分析（近6期）
+    hit_analysis = analyze_hit_expectation(hot5, draws, backtest_games=6)
+
     # 输出
     print("\n🎯 本期投注推荐")
     print("-" * 55)
@@ -328,22 +346,20 @@ def show_prediction() -> None:
     print(f"🐉 次强生肖: {top2}  (近5期命中率 {rate2:.0f}%)")
     print(f"🎲 正码5个:")
     for n in hot5:
-        print(f"      {n:02d} ({get_zodiac(n)})")
-    print(f"🔮 特别号生肖: {special_zod}")
+        prob = hit_analysis['single_probs'].get(n, 0)
+        print(f"      {n:02d} ({get_zodiac(n)})  ─ 近6期命中率 {prob:.0f}%")
+    print(f"🔮 特别号: {picked_special:02d} ({special_zod})")
     print("-" * 55)
-
-    # 三中三组合（10组）
-    three_combos = list(combinations(sorted(hot5), 3))
-    print("🎰 三中三组合 (10组):")
-    for i, combo in enumerate(three_combos, 1):
-        combo_str = " ".join(f"{n:02d}({get_zodiac(n)})" for n in combo)
-        print(f"   {i:2d}. {combo_str}")
+    print(f"📊 正码5个预期表现 (基于近6期回测):")
+    print(f"      • 平均每期命中: {hit_analysis['avg_hits']:.2f} 个")
+    print(f"      • 至少命中1个的概率: {hit_analysis['at_least_one']:.0f}%")
     print("=" * 55)
+    print("⚠️ 数据仅供参考，理性投注。\n")
 
 
 # ---------- 主程序 ----------
 def main():
-    parser = argparse.ArgumentParser(description="新澳门六合彩-定制投注版")
+    parser = argparse.ArgumentParser(description="新澳门六合彩-最终完整版")
     parser.add_argument("cmd", choices=["sync", "show", "auto"], nargs="?", default="show")
     args = parser.parse_args()
 
