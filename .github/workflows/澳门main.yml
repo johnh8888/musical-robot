@@ -2,7 +2,7 @@ name: 新澳门六合彩预测
 
 on:
   schedule:
-    - cron: '0 15 * * *'   # 北京时间 23:00
+    - cron: '0 7 * * *'   # UTC 7:00 = 北京时间 15:00（申时）
   workflow_dispatch:
 
 jobs:
@@ -19,13 +19,10 @@ jobs:
       - name: 安装依赖
         run: pip install requests
       
-      - name: 同步数据
-        run: python macau_predict.py sync --year 2026
-      
-      - name: 生成预测
-        run: python macau_predict.py predict
-      
-      - name: 显示推荐并推送到微信
+      - name: 同步数据并预测
         env:
           PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
-        run: python macau_predict.py show
+        run: |
+          python macau_predict.py sync --year 2026
+          python macau_predict.py predict
+          python macau_predict.py show
