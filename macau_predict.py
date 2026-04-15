@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-新澳门六合彩 - 终极科学版（7期数据 + 动态权重 + PushPlus详细推送）
+新澳门六合彩 
 用法:
     python macau_predict.py sync --year 2026
     python macau_predict.py predict
@@ -9,6 +9,7 @@
 """
 
 import argparse
+import hashlib
 import json
 import logging
 import math
@@ -66,7 +67,7 @@ ZODIAC_MAP = {
     "蛇": [2, 14, 26, 38],
 }
 
-# 波色映射（用于过滤）
+# 波色映射
 COLOR_MAP = {
     "红": [1,2,7,8,12,13,18,19,23,24,29,30,34,35,40,45,46],
     "蓝": [3,4,9,10,14,15,20,21,25,26,31,32,36,37,41,42,47,48],
@@ -76,8 +77,6 @@ COLOR_MAP = {
 ALL_NUMBERS = list(range(1, 50))
 MONTE_CARLO_TRIALS = 5000
 SUM_TARGET = (115, 185)
-
-# 预测时使用的历史期数（只取最近7期）
 PREDICT_WINDOW = 7
 
 
@@ -253,7 +252,7 @@ def upsert_draw(conn: sqlite3.Connection, record: DrawRecord, source: str) -> st
         return "inserted"
 
 
-# -------------------- 数据获取（新澳门专用） --------------------
+# -------------------- 数据获取 --------------------
 def fetch_macau_history(year: int) -> List[DrawRecord]:
     url = MACAU_HISTORY_URL.format(year)
     logger.info(f"正在获取 {year} 年新澳门数据...")
@@ -300,7 +299,7 @@ def sync_draws(conn: sqlite3.Connection, records: List[DrawRecord], source: str 
     return inserted, updated
 
 
-# -------------------- 高级特征工程（适配短窗口）--------------------
+# -------------------- 特征工程 --------------------
 def get_recent_draws(conn: sqlite3.Connection, limit: int = PREDICT_WINDOW) -> List[List[int]]:
     rows = conn.execute(
         "SELECT numbers_json FROM draws ORDER BY draw_date DESC, issue_no DESC LIMIT ?",
@@ -318,7 +317,6 @@ def get_recent_specials(conn: sqlite3.Connection, limit: int = PREDICT_WINDOW) -
 
 
 def calculate_exp_momentum(draws: List[List[int]], half_life: int = 2) -> Dict[int, float]:
-    """指数衰减动量，半衰期调短以适配7期数据"""
     scores = {n: 0.0 for n in ALL_NUMBERS}
     for i, draw in enumerate(draws):
         weight = math.exp(-i / half_life)
@@ -344,13 +342,12 @@ def calculate_pair_lift(draws: List[List[int]]) -> Dict[Tuple[int, int], float]:
     return lift_map
 
 
-# -------------------- 动态权重优化（适配7期短窗口）--------------------
+# -------------------- 动态权重优化 --------------------
 def find_optimal_weights(
     draws: List[List[int]],
     specials: List[int],
     base_weights: Dict[str, float],
 ) -> Dict[str, float]:
-    """在7期数据下，用最近2期作为验证集进行快速网格搜索"""
     if len(draws) < 4:
         return base_weights
 
@@ -589,8 +586,22 @@ def generate_strategy_score(
     markov = SpecialMarkovModel(2)
     markov.train(specials)
     special_pick = markov.predict(specials[-5:] if len(specials) >= 5 else specials)
+
+    # 多样化特别号：基于策略名哈希引入随机扰动
+    seed = int(hashlib.md5(strategy.encode()).hexdigest()[:8], 16) % 10000
+    random.seed(seed)
+    sorted_scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+    candidates = [n for n, _ in sorted_scores if n not in main_picks][:10]
+    if candidates:
+        if random.random() < 0.8 or len(candidates) == 1:
+            special_pick = candidates[0]
+        else:
+            special_pick = random.choice(candidates[1:min(4, len(candidates))])
+    else:
+        special_pick = max(scores, key=lambda n: scores[n] if n not in main_picks else -1)
     while special_pick in main_picks:
         special_pick = (special_pick % 49) + 1
+    random.seed(42)
 
     confidence = sum(scores[n] for n in main_picks) / 6 if main_picks else 0
     return StrategyScore(main_picks, special_pick, confidence, scores)
@@ -620,7 +631,7 @@ def ensemble_vote(
     return StrategyScore(main_picks, sp, confidence, norm_votes)
 
 
-# -------------------- 概率计算工具（基于7期）--------------------
+# -------------------- 概率计算工具 --------------------
 def wilson_interval(hits: int, total: int, z: float = 1.96) -> Tuple[float, float]:
     if total == 0:
         return (0.0, 0.0)
@@ -638,9 +649,8 @@ def bayesian_posterior(hits: int, total: int) -> float:
     return (hits + 1) / (total + 49) * 100
 
 
-# -------------------- PushPlus 微信推送（详细版）--------------------
+# -------------------- 微信推送 --------------------
 def send_pushplus_notification(title: str, content: str) -> bool:
-    """使用 PushPlus 发送微信消息"""
     token = os.environ.get("PUSHPLUS_TOKEN", "")
     if not token:
         print("ℹ️ 未配置 PUSHPLUS_TOKEN，跳过微信推送。")
@@ -664,6 +674,36 @@ def send_pushplus_notification(title: str, content: str) -> bool:
     except Exception as e:
         print(f"❌ PushPlus 推送异常: {e}")
         return False
+
+
+# -------------------- 智能投注方案 --------------------
+def print_betting_plan(hot5, top1_zod, special_first, top_specials, best_combo, budget=200):
+    print("\n" + "=" * 60)
+    print("💰 智能投注方案 (特码/正码/一肖/三中三)")
+    print("=" * 60)
+    print(f"📊 推荐预算: {budget}元\n")
+    special_high = top_specials[0][0] if top_specials else special_first
+    main_focus = best_combo if best_combo and len(best_combo) == 3 else hot5[:3]
+
+    print("【稳健型方案】")
+    print(f"  一肖 {top1_zod}: {int(budget * 0.3)}元")
+    print(f"  特码 {special_first:02d}({int(budget * 0.15)}元) + {special_high:02d}({int(budget * 0.1)}元)")
+    print(f"  正码 {' '.join(f'{n:02d}' for n in main_focus)} 各{int(budget * 0.1)}元")
+    if best_combo:
+        print(f"  三全中 {' '.join(f'{n:02d}' for n in best_combo)}: {int(budget * 0.15)}元")
+
+    print("\n【进取型方案】")
+    print(f"  一肖 {top1_zod}: {int(budget * 0.3)}元")
+    print(f"  特码 {special_high:02d}({int(budget * 0.2)}元) + {special_first:02d}({int(budget * 0.1)}元)")
+    print(f"  正码5个均注: {int(budget * 0.25)}元")
+    if best_combo:
+        print(f"  三全中 {' '.join(f'{n:02d}' for n in best_combo)}: {int(budget * 0.15)}元")
+
+    print("\n【极限精简型】")
+    print(f"  一肖 {top1_zod}: {int(budget * 0.4)}元")
+    print(f"  特码 {special_high:02d}: {int(budget * 0.4)}元")
+    print(f"  正码 {main_focus[0]:02d},{main_focus[1]:02d}: 各{int(budget * 0.1)}元")
+    print("=" * 60)
 
 
 # -------------------- 命令行接口 --------------------
@@ -716,6 +756,49 @@ def cmd_show(args: argparse.Namespace) -> None:
     else:
         print("暂无开奖数据。")
 
+    # ---------- 上期预测复盘 ----------
+    prev_draw = conn.execute("""
+        SELECT issue_no, numbers_json, special_number 
+        FROM draws 
+        ORDER BY draw_date DESC, issue_no DESC 
+        LIMIT 1 OFFSET 1
+    """).fetchone()
+    prev_issue = prev_top1 = prev_top2 = prev_picked_special = None
+    zodiac_hit1 = zodiac_hit2 = special_hit = main_hits = "—"
+    
+    if prev_draw:
+        prev_issue = prev_draw["issue_no"]
+        prev_nums = json.loads(prev_draw["numbers_json"])
+        prev_special = prev_draw["special_number"]
+        prev_pred = conn.execute("""
+            SELECT numbers_json, special_number 
+            FROM predictions 
+            WHERE issue_no = ? AND strategy = 'ensemble'
+        """, (prev_issue,)).fetchone()
+        
+        if prev_pred:
+            prev_picked = json.loads(prev_pred["numbers_json"])
+            prev_picked_special = prev_pred["special_number"]
+            prev_zodiac_score = Counter()
+            for n in prev_picked:
+                for z, nums in ZODIAC_MAP.items():
+                    if n in nums:
+                        prev_zodiac_score[z] += 1
+                        break
+            top_prev_zod = prev_zodiac_score.most_common(2)
+            prev_top1 = top_prev_zod[0][0] if top_prev_zod else "—"
+            prev_top2 = top_prev_zod[1][0] if len(top_prev_zod) > 1 else "—"
+            zodiac_hit1 = "✅" if any(n in ZODIAC_MAP[prev_top1] for n in prev_nums) else "❌"
+            zodiac_hit2 = "✅" if prev_top2 != "—" and any(n in ZODIAC_MAP[prev_top2] for n in prev_nums) else "❌"
+            special_hit = "✅" if prev_picked_special == prev_special else "❌"
+            main_hits = len(set(prev_picked) & set(prev_nums))
+            print(f"📋 上期预测复盘 ({prev_issue})")
+            print(f"   最强生肖: {prev_top1} {zodiac_hit1}  次强: {prev_top2} {zodiac_hit2} | 特别号: {prev_picked_special:02d} {special_hit} | 正码中{main_hits}")
+        else:
+            print(f"📋 上期预测复盘 ({prev_issue}): 无预测记录")
+    else:
+        print("📋 上期预测复盘: 历史数据不足")
+
     # ---------- 多策略推荐 ----------
     pending = conn.execute(
         "SELECT issue_no, strategy, numbers_json, special_number, confidence FROM predictions WHERE status='PENDING' ORDER BY strategy"
@@ -726,7 +809,19 @@ def cmd_show(args: argparse.Namespace) -> None:
             nums = json.loads(p["numbers_json"])
             conf_str = f" (置信度: {p['confidence']*100:.1f}%)" if p["confidence"] else ""
             strategy_name = STRATEGY_CONFIGS.get(p['strategy'], {}).get('name', p['strategy'])
-            print(f"  [{p['issue_no']}] {strategy_name}{conf_str}: {' '.join(f'{n:02d}' for n in nums)} | 特别号: {p['special_number']:02d}")
+            
+            # 计算该策略的极强/次强生肖
+            strat_zodiac = Counter()
+            for n in nums:
+                for z, z_nums in ZODIAC_MAP.items():
+                    if n in z_nums:
+                        strat_zodiac[z] += 1
+                        break
+            top_zod = strat_zodiac.most_common(2)
+            z1 = top_zod[0][0] if top_zod else "—"
+            z2 = top_zod[1][0] if len(top_zod) > 1 else "—"
+            
+            print(f"  [{p['issue_no']}] {strategy_name}{conf_str}: {' '.join(f'{n:02d}' for n in nums)} | 特别号: {p['special_number']:02d} | 极强:{z1} 次强:{z2}")
     else:
         print("\n暂无待开奖预测，请先运行 predict")
 
@@ -756,13 +851,32 @@ def cmd_show(args: argparse.Namespace) -> None:
 
     hot5 = picked_6[:5] if len(picked_6) >= 5 else picked_6
 
-    zodiac_score = Counter()
+    # 综合投票选出最终生肖
+    vote_zodiac = Counter()
+    for p in pending:
+        nums = json.loads(p["numbers_json"])
+        strat_zodiac = Counter()
+        for n in nums:
+            for z, z_nums in ZODIAC_MAP.items():
+                if n in z_nums:
+                    strat_zodiac[z] += 1
+                    break
+        top = strat_zodiac.most_common(2)
+        if top:
+            vote_zodiac[top[0][0]] += 3
+        if len(top) > 1:
+            vote_zodiac[top[1][0]] += 1
+
+    recent_zodiac = Counter()
     for draw in draws[-5:]:
         for n in draw:
             for z, nums in ZODIAC_MAP.items():
                 if n in nums:
-                    zodiac_score[z] += 1
-    top_zod = zodiac_score.most_common(2)
+                    recent_zodiac[z] += 1
+    for z, cnt in recent_zodiac.items():
+        vote_zodiac[z] += cnt * 2
+
+    top_zod = vote_zodiac.most_common(2)
     top1 = top_zod[0][0] if top_zod else "龙"
     top2 = top_zod[1][0] if len(top_zod) > 1 else "马"
 
@@ -913,46 +1027,47 @@ def cmd_show(args: argparse.Namespace) -> None:
     print("=" * 60)
     print("⚠️ 数据仅供参考，理性投注。")
 
-    # ---------- 构建微信推送消息（详细版）----------
+    # ---------- 智能投注方案 ----------
+    print_betting_plan(hot5, top1, picked_special, top6_specials, best_combo, budget=200)
+
+    # ---------- 微信推送（简洁版）----------
     push_lines = []
-    push_lines.append(f"【新澳门预测】{next_issue_str}")
+    push_lines.append(f"【新澳门·{next_issue_str}期推荐】")
     push_lines.append("")
-    push_lines.append(f"🐉 最强生肖: {top1} ({rate1:.0f}%)  次强: {top2} ({rate2:.0f}%)")
+    
+    if prev_draw and prev_pred:
+        push_lines.append(f"📋 上期{prev_issue}复盘：")
+        push_lines.append(f"   生肖 {prev_top1}{zodiac_hit1} {prev_top2}{zodiac_hit2} ｜ 特号 {prev_picked_special:02d}{special_hit} ｜ 正码中{main_hits}")
+        push_lines.append("")
+    
+    push_lines.append(f"🐉 本期主攻生肖：{top1}")
+    push_lines.append(f"🎲 正码5个：{' '.join(f'{n:02d}' for n in hot5)}")
+    push_lines.append(f"🔮 特别号首选：{picked_special:02d}")
     push_lines.append("")
-    push_lines.append("🎲 正码5个 (威尔逊区间 / 后验概率):")
-    for n in hot5:
-        hits_7 = sum(1 for draw in draws if n in draw)
-        low, high = wilson_interval(hits_7, len(draws))
-        posterior = bayesian_posterior(hits_7, len(draws))
-        push_lines.append(f"   {n:02d} ({get_zodiac(n)})  [{low:.0f}%-{high:.0f}%]  {posterior:.1f}%")
+    
+    if top6_specials:
+        push_lines.append("💡 特号备选：")
+        for i, (num, _) in enumerate(top6_specials[:3], 1):
+            push_lines.append(f"   {i}. {num:02d}")
     push_lines.append("")
-    push_lines.append(f"🔮 特别号首选: {picked_special:02d} ({special_zod})")
-    push_lines.append("")
-    if special_lines:
-        push_lines.append("🔯 特别号6码排名:")
-        for line in special_lines[:6]:
-            push_lines.append(line)
-    push_lines.append("")
+    
     if best_combo:
-        best_hits = combo_hits_dict[best_combo]
-        best_prob = best_hits / len(draws) * 100 if draws else 0
-        push_lines.append(f"🏆 极强三中三: {' '.join(f'{n:02d}' for n in best_combo)}")
-        push_lines.append(f"   近{len(draws)}期同时出现 {best_hits} 次 ({best_prob:.1f}%)")
-    push_lines.append("")
+        push_lines.append(f"🏆 三中三极强组合：{' '.join(f'{n:02d}' for n in best_combo)}")
+        push_lines.append("")
+    
     if strat_stats_summary:
-        push_lines.append("📊 最近7期特别号命中率:")
-        for summary in strat_stats_summary:
+        push_lines.append("📊 近期特号命中率：")
+        for summary in strat_stats_summary[:2]:
             push_lines.append(f"   {summary}")
 
     push_content = "\n".join(push_lines)
-    send_pushplus_notification("新澳门六合彩预测", push_content)
+    send_pushplus_notification("新澳门预测", push_content)
 
     conn.close()
 
 
 def cmd_backtest(args: argparse.Namespace) -> None:
     print("回测功能需较长历史数据，当前7期模式不建议运行完整回测。")
-    print("如需回测，请使用完整版脚本。")
 
 
 def build_parser() -> argparse.ArgumentParser:
