@@ -1,28 +1,26 @@
-name: 新澳门六合彩预测
+name: 新澳门六合彩每日预测
 
 on:
   schedule:
-    - cron: '0 7 * * *'   # UTC 7:00 = 北京时间 15:00（申时）
+    - cron: '0 7 * * *'
   workflow_dispatch:
 
 jobs:
-  run:
+  predict:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      
-      - name: 设置 Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.10'
-      
-      - name: 安装依赖
-        run: pip install requests
-      
-      - name: 同步数据并预测
-        env:
-          PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
-        run: |
-          python macau_predict.py sync --year 2026
-          python macau_predict.py predict
-          python macau_predict.py show
+      - name: 缓存数据库
+        uses: actions/cache@v3
+        with:
+          path: macau_fixed.db
+          key: macau-fixed-db
+      - name: 同步数据
+        run: python macau_fixed.py sync
+      - name: 生成预测
+        run: python macau_fixed.py predict
+      - name: 显示推荐
+        run: python macau_fixed.py show
