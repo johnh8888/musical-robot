@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-新澳门六合彩 - 统计主导版（确定性选号 + 轻玄学微调 + 最近8期回测）
-玄学影响力固定 3%，组合枚举候选数优化为 15（原30），速度提升 99%
+新澳门六合彩 - 统计主导版（确定性选号 + 轻玄学微调 + 智能投注方案）
+玄学影响力固定 3%，组合枚举候选数优化为 15
+根据生肖赔率自动计算投注分配（马1:0.7，其他1:1；特码46倍；三中三1000倍）
 用法:
     python macau_predict.py sync          # 同步历史数据
     python macau_predict.py predict       # 生成下期预测
-    python macau_predict.py show          # 显示推荐和最近8期回测统计
+    python macau_predict.py show          # 显示推荐和回测统计，并输出智能投注方案
 """
 
 import argparse
@@ -129,6 +130,14 @@ STAT_POWER = 0.97
 
 # 优化点：组合枚举候选数从 30 降至 15，速度提升 99%
 TOP_CANDIDATES = 15
+
+# 赔率配置
+ZODIAC_ODDS = {
+    "马": 0.7,      # 马赔率 1:0.7
+    # 其他生肖默认为 1.0
+}
+SPECIAL_ODDS = 46
+TRIO_ODDS = 1000   # 三中三赔率（假设）
 
 
 # -------------------- 数据结构 --------------------
@@ -408,7 +417,7 @@ def fetch_macau_history_from_api() -> List[DrawRecord]:
                 nums = [int(x) for x in numbers_str.split(",") if x.strip().isdigit()]
                 if len(nums) >= 7:
                     issue_no = f"{expect_raw[:4]}/{expect_raw[4:]}"
-                    draw_date = datetime.now().strftime("%Y-%m-%d")
+                    draw_date = datetime.now().strftime("%Y-%m-%d")  # 无历史日期，暂用当日
                     records.append(DrawRecord(
                         issue_no=issue_no,
                         draw_date=draw_date,
@@ -595,7 +604,6 @@ def deterministic_pick(
     best_combo = None
     best_score = -1e9
 
-    # 枚举所有组合（C(15,6)=5005，极快）
     for combo in combinations(candidates, 6):
         combo = sorted(combo)
         if not smart_filter(combo):
@@ -610,7 +618,6 @@ def deterministic_pick(
     if best_combo:
         return list(best_combo)
     else:
-        # 没有通过过滤的组合，返回得分最高的6个号码
         return [n for n, _ in sorted_nums[:6]]
 
 
@@ -634,7 +641,6 @@ def smart_filter(nums: List[int]) -> bool:
     tails = [n % 10 for n in s]
     if max(Counter(tails).values()) > 2:
         return False
-    # 连号不超过3
     max_consec = 1
     consec = 1
     for i in range(1, 6):
@@ -731,7 +737,6 @@ def generate_strategy_score(
         return ensemble_vote(draws, specials, pair_lift, use_dynamic_weights, day_wuxing, day_zhi)
 
     main_picks = deterministic_pick(final_scores, pair_lift)
-    # 特别号：从 final_scores 中取除主号外得分最高的号码
     special_candidates = [(n, final_scores[n]) for n in ALL_NUMBERS if n not in main_picks]
     special_pick = max(special_candidates, key=lambda x: x[1])[0] if special_candidates else 1
 
@@ -805,34 +810,75 @@ def send_pushplus_notification(title: str, content: str) -> bool:
         return False
 
 
-# -------------------- 智能投注方案 --------------------
-def print_betting_plan(hot5, top1_zod, special_first, top_specials, best_combo, budget=200):
+# -------------------- 智能投注方案（根据赔率优化）--------------------
+def print_betting_plan(hot5, top1_zod, top2_zod, special_first, top_specials, best_combo, budget=500):
+    """
+    根据生肖赔率动态调整投注方案
+    - 马赔率 1:0.7（即投1元中得0.7元，净亏0.3元）
+    - 其他生肖赔率 1:1（投1元中得1元，保本）
+    - 特码赔率 1:46
+    - 三中三赔率 1:1000（假设）
+    """
+    odds_zodiac = ZODIAC_ODDS.get(top1_zod, 1.0)
+    odds_special = SPECIAL_ODDS
+    odds_trio = TRIO_ODDS
+
+    # 计算实现“保本”所需的生肖投注额（即生肖中奖后至少收回总本金）
+    min_S = budget / odds_zodiac if odds_zodiac > 0 else budget
+    S = int(min_S) + (1 if min_S > int(min_S) else 0)
+    remaining = budget - S
+    if remaining < 0:
+        S = budget
+        T = 0
+        P = 0
+    else:
+        # 剩余资金分配：特码占70%，三中三占30%（可调）
+        T = int(remaining * 0.7)
+        P = remaining - T
+
+    # 若生肖赔率为1:1且 S == budget，则无法购买其他项，提供备选方案
+    if odds_zodiac == 1.0 and S == budget:
+        print("\n⚠️ 当前生肖赔率为1:1，实现严格保本需将全部预算投入生肖，无法购买特码和三中三。")
+        print("   建议降低总预算或接受生肖中时微亏的方案。")
+        # 备选方案：生肖投 budget-20，特码15，三中三5
+        S = budget - 20
+        T = 15
+        P = 5
+        print(f"   备选方案：生肖 {S} 元（中奖得 {S}，亏20），特码 {T} 元，三中三 {P} 元。")
+
     print("\n" + "=" * 60)
-    print("💰 智能投注方案 (特码/正码/一肖/三中三)")
+    print("💰 智能投注方案 (根据实际赔率优化)")
     print("=" * 60)
-    print(f"📊 推荐预算: {budget}元\n")
-    special_high = top_specials[0][0] if top_specials else special_first
-    main_focus = best_combo if best_combo and len(best_combo) == 3 else hot5[:3]
-
-    print("【稳健型方案】")
-    print(f"  一肖 {top1_zod}: {int(budget * 0.3)}元")
-    print(f"  特码 {special_first:02d}({int(budget * 0.15)}元) + {special_high:02d}({int(budget * 0.1)}元)")
-    print(f"  正码 {' '.join(f'{n:02d}' for n in main_focus)} 各{int(budget * 0.1)}元")
+    print(f"📊 总预算: {budget}元")
+    print(f"🐉 生肖: {top1_zod} (赔率 1:{odds_zodiac})")
+    print(f"🎲 特码: {special_first:02d} (赔率 1:{odds_special})")
     if best_combo:
-        print(f"  三全中 {' '.join(f'{n:02d}' for n in best_combo)}: {int(budget * 0.15)}元")
-
-    print("\n【进取型方案】")
-    print(f"  一肖 {top1_zod}: {int(budget * 0.3)}元")
-    print(f"  特码 {special_high:02d}({int(budget * 0.2)}元) + {special_first:02d}({int(budget * 0.1)}元)")
-    print(f"  正码5个均注: {int(budget * 0.25)}元")
-    if best_combo:
-        print(f"  三全中 {' '.join(f'{n:02d}' for n in best_combo)}: {int(budget * 0.15)}元")
-
-    print("\n【极限精简型】")
-    print(f"  一肖 {top1_zod}: {int(budget * 0.4)}元")
-    print(f"  特码 {special_high:02d}: {int(budget * 0.4)}元")
-    print(f"  正码 {main_focus[0]:02d},{main_focus[1]:02d}: 各{int(budget * 0.1)}元")
+        print(f"🏆 三中三: {' '.join(f'{n:02d}' for n in best_combo)} (赔率 1:{odds_trio})")
+    print("-" * 60)
+    print(f"【推荐投注】")
+    print(f"  一肖 {top1_zod}: {S} 元  (中奖得 {S * odds_zodiac:.2f} 元)")
+    if T > 0:
+        print(f"  特码 {special_first:02d}: {T} 元  (中奖得 {T * odds_special} 元)")
+    if P > 0:
+        trio_str = ' '.join(f'{n:02d}' for n in best_combo) if best_combo else "无"
+        print(f"  三中三 {trio_str}: {P} 元  (中奖得 {P * odds_trio} 元)")
+    print("-" * 60)
+    # 计算各种中奖情况下的总回报
+    if T > 0 or P > 0:
+        print("【预期回报】")
+        only_zodiac = S * odds_zodiac
+        print(f"  仅生肖中: 总回报 {only_zodiac:.2f} 元, 净收益 {only_zodiac - budget:.2f} 元")
+        if T > 0:
+            zodiac_special = S * odds_zodiac + T * odds_special
+            print(f"  生肖+特码: {zodiac_special:.2f} 元, 净收益 {zodiac_special - budget:.2f} 元")
+        if P > 0 and best_combo:
+            zodiac_trio = S * odds_zodiac + P * odds_trio
+            print(f"  生肖+三中三: {zodiac_trio:.2f} 元, 净收益 {zodiac_trio - budget:.2f} 元")
+        if T > 0 and P > 0 and best_combo:
+            all_win = S * odds_zodiac + T * odds_special + P * odds_trio
+            print(f"  全部中奖: {all_win:.2f} 元, 净收益 {all_win - budget:.2f} 元")
     print("=" * 60)
+    print("⚠️ 数据仅供参考，理性投注。")
 
 
 # -------------------- 命令行接口 --------------------
@@ -969,7 +1015,7 @@ def cmd_show(args: argparse.Namespace) -> None:
 
     hot5 = picked_6[:5] if len(picked_6) >= 5 else picked_6
 
-    # 生肖投票
+    # 生肖投票（确定最强生肖）
     vote_zodiac = Counter()
     for p in pending:
         nums = json.loads(p["numbers_json"])
@@ -1071,8 +1117,8 @@ def cmd_show(args: argparse.Namespace) -> None:
     print("=" * 60)
     print("⚠️ 数据仅供参考，理性投注。")
 
-    # 智能投注方案
-    print_betting_plan(hot5, top1, picked_special, top6_specials, best_combo, budget=200)
+    # 智能投注方案（使用预算500元，可修改）
+    print_betting_plan(hot5, top1, top2, picked_special, top6_specials, best_combo, budget=500)
 
     # 微信推送（可选）
     push_lines = []
