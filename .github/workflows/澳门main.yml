@@ -17,6 +17,9 @@ jobs:
         with:
           python-version: '3.10'
 
+      - name: 安装依赖
+        run: pip install requests
+
       - name: 缓存数据库
         uses: actions/cache@v3
         with:
