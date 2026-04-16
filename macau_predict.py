@@ -2,20 +2,20 @@
 # -*- coding: utf-8 -*-
 """
 新澳门六合彩 - 统计主导版（确定性选号 + 轻玄学微调 + 最近8期回测）
-玄学影响力固定 3%，蒙特卡洛改为确定性最高分组合
+玄学影响力固定 3%，组合枚举候选数优化为 15（原30），速度提升 99%
 用法:
-    python macau_fixed.py sync          # 同步历史数据
-    python macau_fixed.py predict       # 生成下期预测
-    python macau_fixed.py show          # 显示推荐和最近8期回测统计
+    python macau_predict.py sync          # 同步历史数据
+    python macau_predict.py predict       # 生成下期预测
+    python macau_predict.py show          # 显示推荐和最近8期回测统计
 """
 
 import argparse
-import hashlib
 import json
 import logging
 import math
 import os
 import sqlite3
+import re
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
@@ -31,11 +31,11 @@ logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
-logger = logging.getLogger("macau_fixed")
+logger = logging.getLogger("macau_predict")
 
 # -------------------- 常量与配置 --------------------
 SCRIPT_DIR = Path(__file__).resolve().parent
-DB_PATH_DEFAULT = str(SCRIPT_DIR / "macau_fixed.db")
+DB_PATH_DEFAULT = str(SCRIPT_DIR / "macau_gentle.db")
 
 # 可靠数据源（使用 marksix6.net 中的“新澳门彩”）
 MACAU_API_URL = "https://marksix6.net/index.php?api=1"
@@ -126,6 +126,9 @@ BACKTEST_WINDOW = 8              # 回测最近8期
 # 玄学影响力固定 3%
 FENGSHUI_POWER = 0.03
 STAT_POWER = 0.97
+
+# 优化点：组合枚举候选数从 30 降至 15，速度提升 99%
+TOP_CANDIDATES = 15
 
 
 # -------------------- 数据结构 --------------------
@@ -397,8 +400,6 @@ def fetch_macau_history_from_api() -> List[DrawRecord]:
         history_list = macau_data.get("history", [])
         if history_list:
             for line in history_list:
-                # 格式: "2026106 期：31,48,05,11,46,40,22"
-                import re
                 match = re.match(r"(\d{7})\s*期[：:]\s*([\d,]+)", line)
                 if not match:
                     continue
@@ -407,7 +408,6 @@ def fetch_macau_history_from_api() -> List[DrawRecord]:
                 nums = [int(x) for x in numbers_str.split(",") if x.strip().isdigit()]
                 if len(nums) >= 7:
                     issue_no = f"{expect_raw[:4]}/{expect_raw[4:]}"
-                    # 日期取最新一期的 openTime，但历史条目没有独立日期，暂用当天日期
                     draw_date = datetime.now().strftime("%Y-%m-%d")
                     records.append(DrawRecord(
                         issue_no=issue_no,
@@ -415,7 +415,6 @@ def fetch_macau_history_from_api() -> List[DrawRecord]:
                         numbers=nums[:6],
                         special_number=nums[6]
                     ))
-        # 如果没有 history 则取当前期
         if not records:
             expect_raw = str(macau_data.get("expect", ""))
             numbers_raw = macau_data.get("openCode") or macau_data.get("numbers")
@@ -580,11 +579,11 @@ def generate_strategy_score_with_weights(
     return StrategyScore(main_picks, special, 0.0, scores)
 
 
-# -------------------- 确定性选号（替代蒙特卡洛）--------------------
+# -------------------- 确定性选号（候选数优化为 TOP_CANDIDATES=15）--------------------
 def deterministic_pick(
     scores: Dict[int, float],
     pair_lift: Dict[Tuple[int, int], float],
-    top_candidates: int = 30,
+    top_candidates: int = TOP_CANDIDATES,
 ) -> List[int]:
     """
     确定性选择：从得分最高的 top_candidates 个号码中，枚举所有6码组合，
@@ -596,7 +595,7 @@ def deterministic_pick(
     best_combo = None
     best_score = -1e9
 
-    # 枚举所有组合（C(30,6) ≈ 593775，可接受）
+    # 枚举所有组合（C(15,6)=5005，极快）
     for combo in combinations(candidates, 6):
         combo = sorted(combo)
         if not smart_filter(combo):
@@ -897,7 +896,6 @@ def cmd_show(args: argparse.Namespace) -> None:
 
     # 最近8期回测统计
     print(f"\n📊 最近 {BACKTEST_WINDOW} 期策略回测统计:")
-    # 获取最近 BACKTEST_WINDOW 期数据（按时间升序）
     backtest_draws = conn.execute(
         f"SELECT issue_no, numbers_json, special_number FROM draws ORDER BY draw_date ASC, issue_no ASC LIMIT {BACKTEST_WINDOW}"
     ).fetchall()
