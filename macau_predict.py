@@ -1,12 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-新澳门六合彩预测 - 稳定版（最近3期，自动避免主号重复）
-支持网络重试、CSV备用、确定性选号
-用法:
-    python macau_predict.py sync          # 同步历史数据（自动重试）
-    python macau_predict.py predict       # 生成下期预测
-    python macau_predict.py show          # 显示最终推荐
+新澳门预测 - 
 """
 
 import argparse
@@ -28,14 +23,14 @@ from typing import Dict, List, Optional, Tuple
 
 import requests
 
-# 配置日志
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+# 配置日志（仅错误）
+logging.basicConfig(level=logging.ERROR)
 logger = logging.getLogger("macau_predict")
 
 # -------------------- 常量 --------------------
 SCRIPT_DIR = Path(__file__).resolve().parent
 DB_PATH_DEFAULT = str(SCRIPT_DIR / "macau_gentle.db")
-CSV_FALLBACK_PATH = str(SCRIPT_DIR / "macau_history.csv")   # 备用CSV路径
+CSV_FALLBACK_PATH = str(SCRIPT_DIR / "macau_history.csv")
 MACAU_API_URL = "https://marksix6.net/index.php?api=1"
 
 STRATEGY_CONFIGS = {
@@ -48,7 +43,6 @@ STRATEGY_CONFIGS = {
 }
 STRATEGY_IDS = ["hot", "cold", "momentum", "balanced", "ensemble", "pattern"]
 
-# 生肖映射
 ZODIAC_MAP = {
     "马": [1,13,25,37,49], "羊": [12,24,36,48], "猴": [11,23,35,47],
     "鸡": [10,22,34,46], "狗": [9,21,33,45], "猪": [8,20,32,44],
@@ -96,7 +90,6 @@ ZODIAC_ODDS = {"马": 0.7}
 SPECIAL_ODDS = 46
 TRIO_ODDS = 1000
 
-# 网络请求配置
 REQUEST_TIMEOUT = 60
 REQUEST_RETRIES = 2
 
@@ -277,17 +270,17 @@ def upsert_draw(conn, record, source):
         return "inserted"
 
 
-# -------------------- 数据获取（带重试和CSV备用）--------------------
+# -------------------- 数据获取 --------------------
 def fetch_macau_history_from_api(retry=REQUEST_RETRIES):
     for attempt in range(1, retry+1):
         try:
-            logger.info(f"尝试获取数据 (第{attempt}次)...")
+            print(f"尝试获取数据 (第{attempt}次)...")
             resp = requests.get(MACAU_API_URL, timeout=REQUEST_TIMEOUT, headers={"User-Agent": "Mozilla/5.0"})
             if resp.status_code == 200:
                 data = resp.json()
                 macau_data = next((item for item in data.get("lottery_data",[]) if item.get("name")=="新澳门彩"), None)
                 if not macau_data:
-                    logger.warning("未找到新澳门彩数据")
+                    print("未找到新澳门彩数据")
                     continue
                 records = []
                 for line in macau_data.get("history", []):
@@ -314,18 +307,18 @@ def fetch_macau_history_from_api(retry=REQUEST_RETRIES):
                                 special_number=nums[6]
                             ))
                 if records:
-                    logger.info(f"成功获取 {len(records)} 条记录")
+                    print(f"成功获取 {len(records)} 条记录")
                     return records
         except Exception as e:
-            logger.warning(f"请求失败 (尝试{attempt}/{retry}): {e}")
+            print(f"请求失败 (尝试{attempt}/{retry}): {e}")
             if attempt < retry:
                 time.sleep(2)
-    logger.error("所有API尝试均失败")
+    print("所有API尝试均失败")
     return None
 
 def load_csv_fallback(csv_path):
     if not os.path.exists(csv_path):
-        logger.warning(f"备用CSV文件不存在: {csv_path}")
+        print(f"备用CSV文件不存在: {csv_path}")
         return None
     records = []
     with open(csv_path, "r", encoding="utf-8-sig") as f:
@@ -345,7 +338,7 @@ def load_csv_fallback(csv_path):
                     numbers=nums[:6],
                     special_number=nums[6]
                 ))
-    logger.info(f"从CSV导入 {len(records)} 条记录")
+    print(f"从CSV导入 {len(records)} 条记录")
     return records
 
 def sync_draws(conn, records, source="online"):
@@ -571,24 +564,34 @@ def print_betting_plan(hot5, top1_zod, top2_zod, special_first, top_specials, be
     if rem < 0: S,T,P = budget,0,0
     else: T,P = int(rem*0.7), rem - int(rem*0.7)
     if odds_zod==1.0 and S==budget:
-        print("\n⚠️ 生肖赔率1:1，需全部预算保本，提供备选：生肖480元，特码15元，三中三5元")
-        S,T,P = 480,15,5
+        print("\n⚠️ 当前生肖赔率为1:1，实现严格保本需将全部预算投入生肖，无法购买特码和三中三。")
+        print("   建议降低总预算或接受生肖中时微亏的方案。")
+        S,T,P = budget-20, 15, 5
+        print(f"   备选方案：生肖 {S} 元（中奖得 {S}，亏20），特码 {T} 元，三中三 {P} 元。")
     print("\n"+"="*60)
-    print("💰 智能投注方案")
-    print(f"总预算: {budget}元 | 生肖: {top1_zod} (赔率1:{odds_zod}) | 特码: {special_first:02d} (1:{SPECIAL_ODDS})")
-    if best_combo: print(f"三中三: {' '.join(f'{n:02d}' for n in best_combo)} (1:{TRIO_ODDS})")
+    print("💰 智能投注方案 (根据实际赔率优化)")
+    print("="*60)
+    print(f"📊 总预算: {budget}元")
+    print(f"🐉 生肖: {top1_zod} (赔率 1:{odds_zod})")
+    print(f"🎲 特码: {special_first:02d} (赔率 1:{SPECIAL_ODDS})")
+    if best_combo:
+        print(f"🏆 三中三: {' '.join(f'{n:02d}' for n in best_combo)} (赔率 1:{TRIO_ODDS})")
     print("-"*60)
-    print(f"一肖 {top1_zod}: {S}元 (中得 {S*odds_zod:.2f})")
-    if T>0: print(f"特码 {special_first:02d}: {T}元 (中得 {T*SPECIAL_ODDS})")
-    if P>0 and best_combo: print(f"三中三 {' '.join(f'{n:02d}' for n in best_combo)}: {P}元 (中得 {P*TRIO_ODDS})")
+    print(f"【推荐投注】")
+    print(f"  一肖 {top1_zod}: {S} 元  (中奖得 {S * odds_zod:.2f} 元)")
+    if T>0: print(f"  特码 {special_first:02d}: {T} 元  (中奖得 {T * SPECIAL_ODDS} 元)")
+    if P>0 and best_combo: print(f"  三中三 {' '.join(f'{n:02d}' for n in best_combo)}: {P} 元  (中奖得 {P * TRIO_ODDS} 元)")
     print("-"*60)
     if T>0 or P>0:
-        print("预期回报：")
-        only_z = S*odds_zod
-        print(f"仅生肖中: {only_z:.2f}元, 净收益 {only_z-budget:.2f}")
-        if T>0: print(f"生肖+特码: {only_z+T*SPECIAL_ODDS:.2f}元, 净收益 {only_z+T*SPECIAL_ODDS-budget:.2f}")
-        if P>0 and best_combo: print(f"生肖+三中三: {only_z+P*TRIO_ODDS:.2f}元, 净收益 {only_z+P*TRIO_ODDS-budget:.2f}")
-        if T>0 and P>0 and best_combo: print(f"全中: {only_z+T*SPECIAL_ODDS+P*TRIO_ODDS:.2f}元, 净收益 {only_z+T*SPECIAL_ODDS+P*TRIO_ODDS-budget:.2f}")
+        print("【预期回报】")
+        only_z = S * odds_zod
+        print(f"  仅生肖中: 总回报 {only_z:.2f} 元, 净收益 {only_z - budget:.2f} 元")
+        if T>0:
+            print(f"  生肖+特码: {only_z + T*SPECIAL_ODDS:.2f} 元, 净收益 {only_z + T*SPECIAL_ODDS - budget:.2f} 元")
+        if P>0 and best_combo:
+            print(f"  生肖+三中三: {only_z + P*TRIO_ODDS:.2f} 元, 净收益 {only_z + P*TRIO_ODDS - budget:.2f} 元")
+        if T>0 and P>0 and best_combo:
+            print(f"  全部中奖: {only_z + T*SPECIAL_ODDS + P*TRIO_ODDS:.2f} 元, 净收益 {only_z + T*SPECIAL_ODDS + P*TRIO_ODDS - budget:.2f} 元")
     print("="*60)
 
 
@@ -633,59 +636,203 @@ def cmd_show(args):
     conn = connect_db(args.db)
     init_db(conn)
 
-    # 获取最新一期开奖（用于避免主号完全重复）
-    latest_draw = conn.execute("SELECT numbers_json, special_number FROM draws ORDER BY draw_date DESC LIMIT 1").fetchone()
-    prev_main_set = set(json.loads(latest_draw["numbers_json"])) if latest_draw else set()
-    prev_special = latest_draw["special_number"] if latest_draw else None
+    today = date.today()
+    day_gan, day_zhi, day_wuxing = get_day_ganzhi(today)
 
-    # 获取集成投票预测结果
-    pending = conn.execute("SELECT issue_no, strategy, numbers_json, special_number, confidence FROM predictions WHERE status='PENDING' ORDER BY strategy").fetchall()
-    if not pending:
-        print("暂无待开奖预测，请先运行 predict")
+    # 最新开奖
+    latest = conn.execute(
+        "SELECT issue_no, draw_date, numbers_json, special_number FROM draws ORDER BY draw_date DESC LIMIT 1"
+    ).fetchone()
+    if latest:
+        nums = json.loads(latest["numbers_json"])
+        print(f"最新开奖: {latest['issue_no']} {latest['draw_date']} | 主号: {' '.join(f'{n:02d}' for n in nums)} | 特别号: {latest['special_number']:02d}")
+    else:
+        print("暂无开奖数据。")
+
+    # 最近8期回测统计
+    print(f"\n📊 最近 {BACKTEST_WINDOW} 期策略回测统计:")
+    backtest_draws = conn.execute(
+        f"SELECT issue_no, numbers_json, special_number FROM draws ORDER BY draw_date ASC, issue_no ASC LIMIT {BACKTEST_WINDOW}"
+    ).fetchall()
+    if len(backtest_draws) >= 3:
+        strat_stats = {s: {"total": 0, "hits": 0, "special_hits": 0} for s in STRATEGY_IDS}
+        for draw in backtest_draws:
+            issue = draw["issue_no"]
+            actual_main = set(json.loads(draw["numbers_json"]))
+            actual_special = draw["special_number"]
+            for strat in STRATEGY_IDS:
+                pred = conn.execute(
+                    "SELECT numbers_json, special_number FROM predictions WHERE issue_no = ? AND strategy = ? AND status = 'REVIEWED'",
+                    (issue, strat)
+                ).fetchone()
+                if pred:
+                    strat_stats[strat]["total"] += 1
+                    pred_main = set(json.loads(pred["numbers_json"]))
+                    hit = len(pred_main & actual_main)
+                    strat_stats[strat]["hits"] += hit
+                    if pred["special_number"] == actual_special:
+                        strat_stats[strat]["special_hits"] += 1
+        print(f"  {'策略':<12} {'期数':<6} {'平均命中':<10} {'特别号命中率':<12}")
+        for strat in STRATEGY_IDS:
+            stats = strat_stats[strat]
+            if stats["total"] == 0:
+                continue
+            avg_hit = stats["hits"] / stats["total"]
+            special_rate = stats["special_hits"] / stats["total"] * 100
+            name = STRATEGY_CONFIGS[strat]["name"]
+            print(f"  {name:<12} {stats['total']:<6} {avg_hit:.2f}         {special_rate:.1f}%")
+    else:
+        print("  历史数据不足，无法回测。")
+
+    # 多策略推荐
+    pending = conn.execute(
+        "SELECT issue_no, strategy, numbers_json, special_number, confidence FROM predictions WHERE status='PENDING' ORDER BY strategy"
+    ).fetchall()
+    if pending:
+        print("\n本期多策略推荐 (6码池，统计+玄学融合):")
+        for p in pending:
+            nums = json.loads(p["numbers_json"])
+            conf_str = f" (置信度: {p['confidence']*100:.1f}%)" if p["confidence"] else ""
+            strategy_name = STRATEGY_CONFIGS.get(p['strategy'], {}).get('name', p['strategy'])
+            print(f"  [{p['issue_no']}] {strategy_name}{conf_str}: {' '.join(f'{n:02d}' for n in nums)} | 特别号: {p['special_number']:02d}")
+    else:
+        print("\n暂无待开奖预测，请先运行 predict")
+
+    # 最终推荐（集成投票）
+    print("\n" + "=" * 60)
+    print(f"🎯 本期投注推荐单 (统计 {STAT_POWER*100:.0f}% + 玄学 {FENGSHUI_POWER*100:.0f}% · {day_gan}{day_zhi}日 五行{day_wuxing})")
+    print("=" * 60)
+
+    draws = get_recent_draws(conn, PREDICT_WINDOW)
+    specials = get_recent_specials(conn, PREDICT_WINDOW)
+    if len(draws) < 3:
+        print("历史数据不足，无法生成投注推荐。")
         conn.close()
         return
-    ensemble_row = next((p for p in pending if p["strategy"]=="ensemble"), None)
-    if ensemble_row:
-        main6 = json.loads(ensemble_row["numbers_json"])
-        special = ensemble_row["special_number"]
+
+    ensemble_pred = conn.execute(
+        "SELECT numbers_json, special_number FROM predictions WHERE status='PENDING' AND strategy='ensemble'"
+    ).fetchone()
+    if ensemble_pred:
+        picked_6 = json.loads(ensemble_pred["numbers_json"])
+        picked_special = ensemble_pred["special_number"]
     else:
-        draws = get_recent_draws(conn, PREDICT_WINDOW)
-        specials = get_recent_specials(conn, PREDICT_WINDOW)
         pair_lift = calculate_pair_lift(draws)
-        today = date.today()
-        _, day_zhi, day_wuxing = get_day_ganzhi(today)
-        score = ensemble_vote(draws, specials, pair_lift, True, day_wuxing, day_zhi)
-        main6 = score.main_picks
-        special = score.special_pick
+        score = ensemble_vote(draws, specials, pair_lift, use_dynamic_weights=True, day_wuxing=day_wuxing, day_zhi=day_zhi)
+        picked_6 = score.main_picks
+        picked_special = score.special_pick
 
     # 避免主号与上期完全重复
-    if set(main6) == prev_main_set:
-        draws = get_recent_draws(conn, PREDICT_WINDOW)
-        specials = get_recent_specials(conn, PREDICT_WINDOW)
-        pair_lift = calculate_pair_lift(draws)
-        today = date.today()
-        _, day_zhi, day_wuxing = get_day_ganzhi(today)
-        ensemble_score = ensemble_vote(draws, specials, pair_lift, True, day_wuxing, day_zhi)
-        raw_scores = ensemble_score.raw_scores
-        sorted_scores = sorted(raw_scores.items(), key=lambda x: x[1], reverse=True)
-        candidates = [n for n,_ in sorted_scores if n not in prev_main_set]
-        main_with_scores = [(n, raw_scores[n]) for n in main6]
-        lowest = min(main_with_scores, key=lambda x: x[1])[0]
-        if candidates:
-            new_num = candidates[0]
-            main6 = [new_num if n==lowest else n for n in main6]
-            main6.sort()
-            print(f"⚠️ 原主号与上期完全相同，已将 {lowest:02d} 替换为 {new_num:02d}")
+    if latest:
+        prev_main_set = set(json.loads(latest["numbers_json"]))
+        if set(picked_6) == prev_main_set:
+            # 需要替换一个号码
+            pair_lift = calculate_pair_lift(draws)
+            score = ensemble_vote(draws, specials, pair_lift, True, day_wuxing, day_zhi)
+            raw_scores = score.raw_scores
+            sorted_scores = sorted(raw_scores.items(), key=lambda x: x[1], reverse=True)
+            candidates = [n for n,_ in sorted_scores if n not in prev_main_set]
+            if candidates:
+                # 找出当前主6中得分最低的号码
+                main_with_scores = [(n, raw_scores[n]) for n in picked_6]
+                lowest = min(main_with_scores, key=lambda x: x[1])[0]
+                new_num = candidates[0]
+                picked_6 = [new_num if n==lowest else n for n in picked_6]
+                picked_6.sort()
+                print(f"⚠️ 原主号与上期完全相同，已将 {lowest:02d} 替换为 {new_num:02d}")
 
-    # 输出最终推荐
-    print("\n" + "="*60)
-    print(f"🎯 最终推荐 (最近3期统计 + 玄学3%)")
-    print(f"主号6码: {' '.join(f'{n:02d}' for n in main6)}")
-    print(f"特别号: {special:02d}")
-    print("="*60)
+    hot5 = picked_6[:5] if len(picked_6) >= 5 else picked_6
 
-    # 可选：输出简易投注方案（默认预算500元）
-    # 此处可根据需要调用 print_betting_plan，需提供 hot5, top1_zod 等参数，为简化不展开
+    # 生肖选择（基于最近3期实际命中率）
+    zodiac_hit_count = {z: 0 for z in ZODIAC_MAP.keys()}
+    recent_draws_for_zodiac = draws[-PREDICT_WINDOW:]
+    for draw in recent_draws_for_zodiac:
+        for n in draw:
+            z = get_zodiac(n)
+            if z:
+                zodiac_hit_count[z] += 1
+    total_nums = len(recent_draws_for_zodiac) * 6
+    zodiac_rate = {z: cnt / total_nums * 100 for z, cnt in zodiac_hit_count.items()}
+    sorted_zodiac = sorted(zodiac_rate.items(), key=lambda x: x[1], reverse=True)
+    top1 = sorted_zodiac[0][0] if sorted_zodiac else "龙"
+    top2 = sorted_zodiac[1][0] if len(sorted_zodiac) > 1 else "马"
+    rate1 = zodiac_rate[top1]
+    rate2 = zodiac_rate[top2]
+
+    special_zod = get_zodiac(picked_special)
+
+    next_issue_str = pending[0]['issue_no'] if pending else (next_issue_number(latest['issue_no']) if latest else "未知")
+    print(f"📅 参考期号: {next_issue_str}")
+    print("-" * 60)
+    print(f"🐉 最强生肖: {top1}  (近{len(recent_draws_for_zodiac)}期命中率 {rate1:.0f}%)")
+    print(f"🐉 次强生肖: {top2}  (近{len(recent_draws_for_zodiac)}期命中率 {rate2:.0f}%)")
+    print("🎲 正码5个 (科学概率评估，基于最近3期):")
+    for n in hot5:
+        hits_3 = sum(1 for draw in draws if n in draw)
+        low, high = wilson_interval(hits_3, len(draws))
+        posterior = bayesian_posterior(hits_3, len(draws))
+        print(f"      {n:02d} ({get_zodiac(n)})  ─ 威尔逊区间 [{low:.0f}%-{high:.0f}%]  后验概率 {posterior:.1f}%")
+    print(f"🔮 特别号 (首选): {picked_special:02d} ({special_zod})")
+
+    # 特别号6码推荐
+    pair_lift = calculate_pair_lift(draws)
+    scores_list = []
+    for s in ["hot", "cold", "momentum", "balanced", "pattern"]:
+        score_obj = generate_strategy_score(draws, specials, s, pair_lift, use_dynamic_weights=True,
+                                            day_wuxing=day_wuxing, day_zhi=day_zhi)
+        scores_list.append(score_obj.raw_scores)
+    votes = {n: 0.0 for n in ALL_NUMBERS}
+    for sc in scores_list:
+        ranked = sorted(sc.items(), key=lambda x: x[1], reverse=True)
+        for rank, (n, _) in enumerate(ranked):
+            votes[n] += 49 - rank
+    max_vote = max(votes.values()) if votes else 1
+    norm_votes = {n: v / max_vote for n, v in votes.items()}
+    special_scores = {n: norm_votes[n] for n in ALL_NUMBERS}
+    for n in hot5:
+        special_scores[n] = -1.0
+    top6_specials = sorted(special_scores.items(), key=lambda x: x[1], reverse=True)[:6]
+    print("\n🔯 特别号6码推荐 (按综合评分排序):")
+    for i, (num, score) in enumerate(top6_specials, 1):
+        print(f"   {i}. {num:02d} ({get_zodiac(num)})  ─ 综合评分: {score*100:.1f}%")
+
+    # 三中三推荐
+    best_combo = None
+    if len(hot5) >= 3:
+        print("\n🎰 三中三推荐 (从正码5个组合生成，共10组):")
+        three_combos = list(combinations(sorted(hot5), 3))
+        combo_hits = {}
+        for combo in three_combos:
+            hits = sum(1 for draw in draws if all(n in draw for n in combo))
+            combo_hits[combo] = hits
+        for i, combo in enumerate(three_combos, 1):
+            hits = combo_hits[combo]
+            prob = hits / len(draws) * 100 if draws else 0
+            combo_str = " ".join(f"{n:02d}({get_zodiac(n)})" for n in combo)
+            print(f"   {i:2d}. {combo_str}  ─ 近{len(draws)}期同时出现 {hits} 次 ({prob:.1f}%)")
+        if combo_hits:
+            best_combo = max(three_combos, key=lambda c: combo_hits[c])
+            best_hits = combo_hits[best_combo]
+            best_prob = best_hits / len(draws) * 100 if draws else 0
+            best_combo_str = " ".join(f"{n:02d}({get_zodiac(n)})" for n in best_combo)
+            print(f"\n🏆 极强推荐组合: {best_combo_str} (近{len(draws)}期出现 {best_hits} 次, {best_prob:.1f}%)")
+
+    print("=" * 60)
+    print("⚠️ 数据仅供参考，理性投注。")
+
+    # 智能投注方案（使用预算500元）
+    print_betting_plan(hot5, top1, top2, picked_special, top6_specials, best_combo, budget=500)
+
+    # 微信推送（可选）
+    push_lines = []
+    push_lines.append(f"【新澳门·{next_issue_str}期推荐】")
+    push_lines.append(f"今日{day_gan}{day_zhi}日 五行{day_wuxing} · 玄学权重{FENGSHUI_POWER*100:.0f}%")
+    push_lines.append(f"🐉 主攻生肖：{top1}")
+    push_lines.append(f"🎲 正码5个：{' '.join(f'{n:02d}' for n in hot5)}")
+    push_lines.append(f"🔮 特别号：{picked_special:02d}")
+    push_lines.append(f"🏆 三中三组合：{' '.join(f'{n:02d}' for n in best_combo) if best_combo else '无'}")
+    send_pushplus_notification("新澳门预测", "\n".join(push_lines))
+
     conn.close()
 
 def cmd_backtest(args):
