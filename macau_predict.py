@@ -1,19 +1,24 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-新澳门六合彩 - 
-    python macau_predict.py sync
-    python macau_predict.py predict
-    python macau_predict.py show
+新澳门六合彩预测 - 稳定版（最近3期，自动避免主号重复）
+支持网络重试、CSV备用、确定性选号
+用法:
+    python macau_predict.py sync          # 同步历史数据（自动重试）
+    python macau_predict.py predict       # 生成下期预测
+    python macau_predict.py show          # 显示最终推荐
 """
 
 import argparse
+import csv
 import json
 import logging
 import math
 import os
+import sys
 import sqlite3
 import re
+import time
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
@@ -23,13 +28,14 @@ from typing import Dict, List, Optional, Tuple
 
 import requests
 
-# -------------------- 日志 --------------------
+# 配置日志
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("macau_predict")
 
 # -------------------- 常量 --------------------
 SCRIPT_DIR = Path(__file__).resolve().parent
 DB_PATH_DEFAULT = str(SCRIPT_DIR / "macau_gentle.db")
+CSV_FALLBACK_PATH = str(SCRIPT_DIR / "macau_history.csv")   # 备用CSV路径
 MACAU_API_URL = "https://marksix6.net/index.php?api=1"
 
 STRATEGY_CONFIGS = {
@@ -42,7 +48,7 @@ STRATEGY_CONFIGS = {
 }
 STRATEGY_IDS = ["hot", "cold", "momentum", "balanced", "ensemble", "pattern"]
 
-# 生肖映射（略，完整见后）
+# 生肖映射
 ZODIAC_MAP = {
     "马": [1,13,25,37,49], "羊": [12,24,36,48], "猴": [11,23,35,47],
     "鸡": [10,22,34,46], "狗": [9,21,33,45], "猪": [8,20,32,44],
@@ -89,6 +95,10 @@ TOP_CANDIDATES = 16
 ZODIAC_ODDS = {"马": 0.7}
 SPECIAL_ODDS = 46
 TRIO_ODDS = 1000
+
+# 网络请求配置
+REQUEST_TIMEOUT = 60
+REQUEST_RETRIES = 2
 
 
 @dataclass
@@ -267,43 +277,76 @@ def upsert_draw(conn, record, source):
         return "inserted"
 
 
-# -------------------- 数据获取 --------------------
-def fetch_macau_history_from_api():
-    logger.info("从 marksix6.net 获取新澳门彩历史数据...")
-    try:
-        resp = requests.get(MACAU_API_URL, timeout=30, headers={"User-Agent": "Mozilla/5.0"})
-        if resp.status_code != 200: return []
-        data = resp.json()
-        macau_data = next((item for item in data.get("lottery_data",[]) if item.get("name")=="新澳门彩"), None)
-        if not macau_data: return []
-        records = []
-        for line in macau_data.get("history", []):
-            m = re.match(r"(\d{7})\s*期[：:]\s*([\d,]+)", line)
-            if m:
-                nums = [int(x) for x in m.group(2).split(",") if x.strip().isdigit()]
-                if len(nums) >= 7:
-                    records.append(DrawRecord(
-                        issue_no=f"{m.group(1)[:4]}/{m.group(1)[4:]}",
-                        draw_date=datetime.now().strftime("%Y-%m-%d"),
-                        numbers=nums[:6],
-                        special_number=nums[6]
-                    ))
-        if not records:
-            expect = str(macau_data.get("expect",""))
-            code = macau_data.get("openCode","")
-            if code and len(expect)>=7:
-                nums = [int(x) for x in code.split(",") if x.strip().isdigit()]
-                if len(nums)>=7:
-                    records.append(DrawRecord(
-                        issue_no=f"{expect[:4]}/{expect[4:]}",
-                        draw_date=macau_data.get("openTime","")[:10] or datetime.now().strftime("%Y-%m-%d"),
-                        numbers=nums[:6],
-                        special_number=nums[6]
-                    ))
-        return records
-    except Exception as e:
-        logger.error(f"获取数据异常: {e}")
-        return []
+# -------------------- 数据获取（带重试和CSV备用）--------------------
+def fetch_macau_history_from_api(retry=REQUEST_RETRIES):
+    for attempt in range(1, retry+1):
+        try:
+            logger.info(f"尝试获取数据 (第{attempt}次)...")
+            resp = requests.get(MACAU_API_URL, timeout=REQUEST_TIMEOUT, headers={"User-Agent": "Mozilla/5.0"})
+            if resp.status_code == 200:
+                data = resp.json()
+                macau_data = next((item for item in data.get("lottery_data",[]) if item.get("name")=="新澳门彩"), None)
+                if not macau_data:
+                    logger.warning("未找到新澳门彩数据")
+                    continue
+                records = []
+                for line in macau_data.get("history", []):
+                    m = re.match(r"(\d{7})\s*期[：:]\s*([\d,]+)", line)
+                    if m:
+                        nums = [int(x) for x in m.group(2).split(",") if x.strip().isdigit()]
+                        if len(nums) >= 7:
+                            records.append(DrawRecord(
+                                issue_no=f"{m.group(1)[:4]}/{m.group(1)[4:]}",
+                                draw_date=datetime.now().strftime("%Y-%m-%d"),
+                                numbers=nums[:6],
+                                special_number=nums[6]
+                            ))
+                if not records:
+                    expect = str(macau_data.get("expect",""))
+                    code = macau_data.get("openCode","")
+                    if code and len(expect)>=7:
+                        nums = [int(x) for x in code.split(",") if x.strip().isdigit()]
+                        if len(nums)>=7:
+                            records.append(DrawRecord(
+                                issue_no=f"{expect[:4]}/{expect[4:]}",
+                                draw_date=macau_data.get("openTime","")[:10] or datetime.now().strftime("%Y-%m-%d"),
+                                numbers=nums[:6],
+                                special_number=nums[6]
+                            ))
+                if records:
+                    logger.info(f"成功获取 {len(records)} 条记录")
+                    return records
+        except Exception as e:
+            logger.warning(f"请求失败 (尝试{attempt}/{retry}): {e}")
+            if attempt < retry:
+                time.sleep(2)
+    logger.error("所有API尝试均失败")
+    return None
+
+def load_csv_fallback(csv_path):
+    if not os.path.exists(csv_path):
+        logger.warning(f"备用CSV文件不存在: {csv_path}")
+        return None
+    records = []
+    with open(csv_path, "r", encoding="utf-8-sig") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            issue = row.get("期号") or row.get("issue")
+            date_str = row.get("日期") or row.get("date")
+            nums_str = row.get("开奖号码") or row.get("numbers")
+            special_str = row.get("特别号码") or row.get("special")
+            if not issue or not nums_str:
+                continue
+            nums = [int(x) for x in re.findall(r"\d+", nums_str) if 1<=int(x)<=49]
+            if len(nums) >= 7:
+                records.append(DrawRecord(
+                    issue_no=issue,
+                    draw_date=date_str or "",
+                    numbers=nums[:6],
+                    special_number=nums[6]
+                ))
+    logger.info(f"从CSV导入 {len(records)} 条记录")
+    return records
 
 def sync_draws(conn, records, source="online"):
     ins = upd = 0
@@ -456,7 +499,7 @@ def generate_strategy_score(draws, specials, strategy, pair_lift, use_dynamic_we
         weights = find_optimal_weights(draws, specials, weights)
     freq = {n:0.0 for n in ALL_NUMBERS}
     for d in draws:
-        for n in d: freq[n]+=1.0
+        for n in d: freq[n] += 1.0
     omit = {}
     for n in ALL_NUMBERS:
         for i,d in enumerate(draws):
@@ -553,9 +596,13 @@ def print_betting_plan(hot5, top1_zod, top2_zod, special_first, top_specials, be
 def cmd_sync(args):
     conn = connect_db(args.db)
     init_db(conn)
+    print("正在同步新澳门彩历史数据...")
     records = fetch_macau_history_from_api()
+    if records is None:
+        print("API获取失败，尝试从CSV导入...")
+        records = load_csv_fallback(CSV_FALLBACK_PATH)
     if not records:
-        print("错误：未获取到有效记录。")
+        print("错误：未获取到有效记录。请检查网络或提供CSV文件。")
         return
     ins, upd = sync_draws(conn, records, "macau_api")
     print(f"同步完成：新增 {ins} 期，更新 {upd} 期。")
@@ -586,7 +633,7 @@ def cmd_show(args):
     conn = connect_db(args.db)
     init_db(conn)
 
-    # 获取最新一期开奖（用于排除完全重复）
+    # 获取最新一期开奖（用于避免主号完全重复）
     latest_draw = conn.execute("SELECT numbers_json, special_number FROM draws ORDER BY draw_date DESC LIMIT 1").fetchone()
     prev_main_set = set(json.loads(latest_draw["numbers_json"])) if latest_draw else set()
     prev_special = latest_draw["special_number"] if latest_draw else None
@@ -602,7 +649,6 @@ def cmd_show(args):
         main6 = json.loads(ensemble_row["numbers_json"])
         special = ensemble_row["special_number"]
     else:
-        # 重新生成 ensemble
         draws = get_recent_draws(conn, PREDICT_WINDOW)
         specials = get_recent_specials(conn, PREDICT_WINDOW)
         pair_lift = calculate_pair_lift(draws)
@@ -612,10 +658,8 @@ def cmd_show(args):
         main6 = score.main_picks
         special = score.special_pick
 
-    # ----- 避免与上期主号完全相同 -----
+    # 避免主号与上期完全重复
     if set(main6) == prev_main_set:
-        # 需要替换其中一个号码
-        # 先获取特别号6码推荐（从集成投票的 raw_scores 中取）
         draws = get_recent_draws(conn, PREDICT_WINDOW)
         specials = get_recent_specials(conn, PREDICT_WINDOW)
         pair_lift = calculate_pair_lift(draws)
@@ -623,50 +667,26 @@ def cmd_show(args):
         _, day_zhi, day_wuxing = get_day_ganzhi(today)
         ensemble_score = ensemble_vote(draws, specials, pair_lift, True, day_wuxing, day_zhi)
         raw_scores = ensemble_score.raw_scores
-        # 计算所有号码的得分并排序
         sorted_scores = sorted(raw_scores.items(), key=lambda x: x[1], reverse=True)
-        # 找出不在上期主号中的最高分号码
         candidates = [n for n,_ in sorted_scores if n not in prev_main_set]
-        # 找出当前主6中得分最低的号码
         main_with_scores = [(n, raw_scores[n]) for n in main6]
         lowest = min(main_with_scores, key=lambda x: x[1])[0]
-        # 替换
         if candidates:
             new_num = candidates[0]
             main6 = [new_num if n==lowest else n for n in main6]
             main6.sort()
             print(f"⚠️ 原主号与上期完全相同，已将 {lowest:02d} 替换为 {new_num:02d}")
 
-    # ----- 避免特别号与上期特别号相同 -----
-    if special == prev_special:
-        # 从特别号6码推荐中取下一个最高分且不等于上期特别号的号码
-        draws = get_recent_draws(conn, PREDICT_WINDOW)
-        specials = get_recent_specials(conn, PREDICT_WINDOW)
-        pair_lift = calculate_pair_lift(draws)
-        today = date.today()
-        _, day_zhi, day_wuxing = get_day_ganzhi(today)
-        ensemble_score = ensemble_vote(draws, specials, pair_lift, True, day_wuxing, day_zhi)
-        raw_scores = ensemble_score.raw_scores
-        # 获取特别号6码推荐（按得分排序）
-        special_candidates = sorted([(n, raw_scores[n]) for n in ALL_NUMBERS if n not in main6], key=lambda x: x[1], reverse=True)
-        for cand, _ in special_candidates:
-            if cand != prev_special:
-                special = cand
-                print(f"⚠️ 特别号与上期相同，已替换为 {special:02d}")
-                break
-
-    # 后续输出和生肖计算等保持不变（略，使用上面的 main6 和 special）
-    # 为了简洁，这里只输出最终推荐的核心部分，完整代码请见最终脚本文件。
-
-    # ... 此处省略输出部分，实际脚本会包含完整的 show 输出，但为了长度，我已将完整脚本上传至附件。
-    # 以下仅输出最终推荐的核心内容
+    # 输出最终推荐
     print("\n" + "="*60)
     print(f"🎯 最终推荐 (最近3期统计 + 玄学3%)")
     print(f"主号6码: {' '.join(f'{n:02d}' for n in main6)}")
     print(f"特别号: {special:02d}")
     print("="*60)
-    conn.close()
 
+    # 可选：输出简易投注方案（默认预算500元）
+    # 此处可根据需要调用 print_betting_plan，需提供 hot5, top1_zod 等参数，为简化不展开
+    conn.close()
 
 def cmd_backtest(args):
     print("轻量回测已在 show 命令中展示最近8期统计，无需单独运行。")
