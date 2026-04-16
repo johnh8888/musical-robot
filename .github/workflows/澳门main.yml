@@ -2,8 +2,8 @@ name: 澳门六合彩每日预测
 
 on:
   schedule:
-    - cron: '0 7 * * *'
-  workflow_dispatch:
+    - cron: '0 7 * * *'      # 每天 UTC 7:00 (北京时间 15:00)
+  workflow_dispatch:          # 支持手动触发
 
 jobs:
   predict:
@@ -28,13 +28,13 @@ jobs:
           restore-keys: |
             macau-gentle-db
 
-      - name: 同步历史数据
+      - name: 同步历史数据（自动重试，CSV备用）
         run: python macau_predict.py sync
 
       - name: 生成下期预测
         run: python macau_predict.py predict
 
-      - name: 显示推荐和回测
+      - name: 显示最终推荐
         run: python macau_predict.py show
 
       - name: 上传预测报告
