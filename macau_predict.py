@@ -1,9 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-新澳门六合彩 - 统计主导版（确定性选号 + 轻玄学微调 + 最近6期预测）
-玄学影响力固定 3%，组合枚举候选数优化为 16，基于最近6期数据预测
-根据生肖赔率自动计算投注分配（马1:0.7，其他1:1；特码46倍；三中三1000倍）
+新澳门六合彩 
 用法:
     python macau_predict.py sync          # 同步历史数据
     python macau_predict.py predict       # 生成下期预测
@@ -121,14 +119,14 @@ AVOID_PENALTY = 0.1
 
 ALL_NUMBERS = list(range(1, 50))
 SUM_TARGET = (105, 195)          # 放宽和值范围
-PREDICT_WINDOW = 6               # 预测使用最近6期（原7期改为6期）
+PREDICT_WINDOW = 3               # 预测使用最近3期（改为3期）
 BACKTEST_WINDOW = 8              # 回测最近8期
 
 # 玄学影响力固定 3%
 FENGSHUI_POWER = 0.03
 STAT_POWER = 0.97
 
-# 优化点：组合枚举候选数从 30 降至 16（原15改为16）
+# 组合枚举候选数 16
 TOP_CANDIDATES = 16
 
 # 赔率配置
@@ -900,8 +898,8 @@ def cmd_predict(args: argparse.Namespace) -> None:
     init_db(conn)
     draws = get_recent_draws(conn, PREDICT_WINDOW)
     specials = get_recent_specials(conn, PREDICT_WINDOW)
-    if len(draws) < 4:
-        print("错误：历史数据不足（至少需要4期），请先运行 sync。")
+    if len(draws) < 3:
+        print("错误：历史数据不足（至少需要3期），请先运行 sync。")
         return
     pair_lift = calculate_pair_lift(draws)
     latest = conn.execute("SELECT issue_no FROM draws ORDER BY draw_date DESC LIMIT 1").fetchone()
@@ -996,7 +994,7 @@ def cmd_show(args: argparse.Namespace) -> None:
 
     draws = get_recent_draws(conn, PREDICT_WINDOW)
     specials = get_recent_specials(conn, PREDICT_WINDOW)
-    if len(draws) < 4:
+    if len(draws) < 3:
         print("历史数据不足，无法生成投注推荐。")
         conn.close()
         return
@@ -1015,10 +1013,9 @@ def cmd_show(args: argparse.Namespace) -> None:
 
     hot5 = picked_6[:5] if len(picked_6) >= 5 else picked_6
 
-    # ---------- 修正生肖选择：直接基于最近6期实际命中率 ----------
-    # 统计最近6期开奖中每个生肖出现的次数（主号）
+    # 生肖选择：基于最近3期实际命中率
     zodiac_hit_count = {z: 0 for z in ZODIAC_MAP.keys()}
-    recent_draws_for_zodiac = draws[-6:]  # 最近6期（与预测窗口一致）
+    recent_draws_for_zodiac = draws[-PREDICT_WINDOW:]  # 最近3期
     for draw in recent_draws_for_zodiac:
         for n in draw:
             z = get_zodiac(n)
@@ -1039,11 +1036,11 @@ def cmd_show(args: argparse.Namespace) -> None:
     print("-" * 60)
     print(f"🐉 最强生肖: {top1}  (近{len(recent_draws_for_zodiac)}期命中率 {rate1:.0f}%)")
     print(f"🐉 次强生肖: {top2}  (近{len(recent_draws_for_zodiac)}期命中率 {rate2:.0f}%)")
-    print("🎲 正码5个 (科学概率评估，基于最近6期):")
+    print("🎲 正码5个 (科学概率评估，基于最近3期):")
     for n in hot5:
-        hits_6 = sum(1 for draw in draws if n in draw)
-        low, high = wilson_interval(hits_6, len(draws))
-        posterior = bayesian_posterior(hits_6, len(draws))
+        hits_3 = sum(1 for draw in draws if n in draw)
+        low, high = wilson_interval(hits_3, len(draws))
+        posterior = bayesian_posterior(hits_3, len(draws))
         print(f"      {n:02d} ({get_zodiac(n)})  ─ 威尔逊区间 [{low:.0f}%-{high:.0f}%]  后验概率 {posterior:.1f}%")
     print(f"🔮 特别号 (首选): {picked_special:02d} ({special_zod})")
 
@@ -1114,7 +1111,7 @@ def cmd_backtest(args: argparse.Namespace) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="新澳门六合彩 - 确定性选号版")
+    parser = argparse.ArgumentParser(description="新澳门六合彩 - 确定性选号版（最近3期预测）")
     parser.add_argument("--db", default=DB_PATH_DEFAULT, help="数据库路径")
     sub = parser.add_subparsers(dest="command", required=True)
 
