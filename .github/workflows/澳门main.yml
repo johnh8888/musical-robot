@@ -1,4 +1,4 @@
-name: 新澳门六合彩每日预测
+name: 澳门六合彩每日预测
 
 on:
   schedule:
@@ -9,18 +9,34 @@ jobs:
   predict:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - name: 拉取代码
+        uses: actions/checkout@v4
+
+      - name: 设置 Python
+        uses: actions/setup-python@v5
         with:
           python-version: '3.10'
+
       - name: 缓存数据库
         uses: actions/cache@v3
         with:
-          path: macau_fixed.db
-          key: macau-fixed-db
-      - name: 同步数据
-        run: python macau_fixed.py sync
-      - name: 生成预测
-        run: python macau_fixed.py predict
-      - name: 显示推荐
-        run: python macau_fixed.py show
+          path: macau_gentle.db
+          key: macau-gentle-db
+          restore-keys: |
+            macau-gentle-db
+
+      - name: 同步历史数据
+        run: python macau_predict.py sync
+
+      - name: 生成下期预测
+        run: python macau_predict.py predict
+
+      - name: 显示推荐和回测
+        run: python macau_predict.py show
+
+      - name: 上传预测报告
+        uses: actions/upload-artifact@v4
+        with:
+          name: macau-prediction
+          path: macau_gentle.db
+        if: always()
