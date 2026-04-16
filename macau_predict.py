@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-新澳门六合彩 - 统计主导版（确定性选号 + 轻玄学微调 + 智能投注方案）
-玄学影响力固定 3%，组合枚举候选数优化为 15
+新澳门六合彩 - 统计主导版（确定性选号 + 轻玄学微调 + 最近6期预测）
+玄学影响力固定 3%，组合枚举候选数优化为 16，基于最近6期数据预测
 根据生肖赔率自动计算投注分配（马1:0.7，其他1:1；特码46倍；三中三1000倍）
 用法:
     python macau_predict.py sync          # 同步历史数据
@@ -121,15 +121,15 @@ AVOID_PENALTY = 0.1
 
 ALL_NUMBERS = list(range(1, 50))
 SUM_TARGET = (105, 195)          # 放宽和值范围
-PREDICT_WINDOW = 7
+PREDICT_WINDOW = 6               # 预测使用最近6期（原7期改为6期）
 BACKTEST_WINDOW = 8              # 回测最近8期
 
 # 玄学影响力固定 3%
 FENGSHUI_POWER = 0.03
 STAT_POWER = 0.97
 
-# 优化点：组合枚举候选数从 30 降至 15，速度提升 99%
-TOP_CANDIDATES = 15
+# 优化点：组合枚举候选数从 30 降至 16（原15改为16）
+TOP_CANDIDATES = 16
 
 # 赔率配置
 ZODIAC_ODDS = {
@@ -588,7 +588,7 @@ def generate_strategy_score_with_weights(
     return StrategyScore(main_picks, special, 0.0, scores)
 
 
-# -------------------- 确定性选号（候选数优化为 TOP_CANDIDATES=15）--------------------
+# -------------------- 确定性选号（候选数优化为 TOP_CANDIDATES=16）--------------------
 def deterministic_pick(
     scores: Dict[int, float],
     pair_lift: Dict[Tuple[int, int], float],
@@ -1015,59 +1015,35 @@ def cmd_show(args: argparse.Namespace) -> None:
 
     hot5 = picked_6[:5] if len(picked_6) >= 5 else picked_6
 
-    # 生肖投票（确定最强生肖）
-    vote_zodiac = Counter()
-    for p in pending:
-        nums = json.loads(p["numbers_json"])
-        strat_zodiac = Counter()
-        for n in nums:
-            for z, z_nums in ZODIAC_MAP.items():
-                if n in z_nums:
-                    strat_zodiac[z] += 1
-                    break
-        top = strat_zodiac.most_common(2)
-        if top:
-            vote_zodiac[top[0][0]] += 3
-        if len(top) > 1:
-            vote_zodiac[top[1][0]] += 1
-    recent_zodiac = Counter()
-    for draw in draws[-5:]:
+    # ---------- 修正生肖选择：直接基于最近6期实际命中率 ----------
+    # 统计最近6期开奖中每个生肖出现的次数（主号）
+    zodiac_hit_count = {z: 0 for z in ZODIAC_MAP.keys()}
+    recent_draws_for_zodiac = draws[-6:]  # 最近6期（与预测窗口一致）
+    for draw in recent_draws_for_zodiac:
         for n in draw:
-            for z, nums in ZODIAC_MAP.items():
-                if n in nums:
-                    recent_zodiac[z] += 1
-    for z, cnt in recent_zodiac.items():
-        vote_zodiac[z] += cnt * 2
-    top_zod = vote_zodiac.most_common(2)
-    top1 = top_zod[0][0] if top_zod else "龙"
-    top2 = top_zod[1][0] if len(top_zod) > 1 else "马"
+            z = get_zodiac(n)
+            if z:
+                zodiac_hit_count[z] += 1
+    total_nums = len(recent_draws_for_zodiac) * 6
+    zodiac_rate = {z: cnt / total_nums * 100 for z, cnt in zodiac_hit_count.items()}
+    sorted_zodiac = sorted(zodiac_rate.items(), key=lambda x: x[1], reverse=True)
+    top1 = sorted_zodiac[0][0] if sorted_zodiac else "龙"
+    top2 = sorted_zodiac[1][0] if len(sorted_zodiac) > 1 else "马"
+    rate1 = zodiac_rate[top1]
+    rate2 = zodiac_rate[top2]
 
     special_zod = get_zodiac(picked_special)
-
-    def zodiac_hit_rate(zod, limit=5):
-        if len(draws) < limit:
-            limit = len(draws)
-        if limit == 0:
-            return 0
-        hits = 0
-        for draw in draws[-limit:]:
-            if any(n in ZODIAC_MAP[zod] for n in draw):
-                hits += 1
-        return hits / limit * 100
-
-    rate1 = zodiac_hit_rate(top1)
-    rate2 = zodiac_hit_rate(top2)
 
     next_issue_str = pending[0]['issue_no'] if pending else (next_issue_number(latest['issue_no']) if latest else "未知")
     print(f"📅 参考期号: {next_issue_str}")
     print("-" * 60)
-    print(f"🐉 最强生肖: {top1}  (近{min(5, len(draws))}期命中率 {rate1:.0f}%)")
-    print(f"🐉 次强生肖: {top2}  (近{min(5, len(draws))}期命中率 {rate2:.0f}%)")
-    print("🎲 正码5个 (科学概率评估，基于最近7期):")
+    print(f"🐉 最强生肖: {top1}  (近{len(recent_draws_for_zodiac)}期命中率 {rate1:.0f}%)")
+    print(f"🐉 次强生肖: {top2}  (近{len(recent_draws_for_zodiac)}期命中率 {rate2:.0f}%)")
+    print("🎲 正码5个 (科学概率评估，基于最近6期):")
     for n in hot5:
-        hits_7 = sum(1 for draw in draws if n in draw)
-        low, high = wilson_interval(hits_7, len(draws))
-        posterior = bayesian_posterior(hits_7, len(draws))
+        hits_6 = sum(1 for draw in draws if n in draw)
+        low, high = wilson_interval(hits_6, len(draws))
+        posterior = bayesian_posterior(hits_6, len(draws))
         print(f"      {n:02d} ({get_zodiac(n)})  ─ 威尔逊区间 [{low:.0f}%-{high:.0f}%]  后验概率 {posterior:.1f}%")
     print(f"🔮 特别号 (首选): {picked_special:02d} ({special_zod})")
 
