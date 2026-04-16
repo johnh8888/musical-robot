@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 新澳门六合彩 - 温和玄学版（统计主导 + 金水微调 + 动态权重）
+玄学影响力仅 3%，统计占 97%
 用法:
     python macau_predict.py sync --year 2026
     python macau_predict.py predict
@@ -122,8 +123,8 @@ MONTE_CARLO_TRIALS = 5000
 SUM_TARGET = (115, 185)
 PREDICT_WINDOW = 7
 
-# 玄学影响力（可通过环境变量 FENGSHUI_POWER 调节，范围 0~1，默认 0.2）
-FENGSHUI_POWER = float(os.environ.get("FENGSHUI_POWER", "0.2"))
+# 玄学影响力（固定为 3%，可通过环境变量覆盖）
+FENGSHUI_POWER = float(os.environ.get("FENGSHUI_POWER", "0.03"))   # 修改：默认 3%
 STAT_POWER = 1.0 - FENGSHUI_POWER
 
 
@@ -729,7 +730,7 @@ def generate_strategy_score(
     else:
         fengshui_scores = {n: 0.5 for n in ALL_NUMBERS}
 
-    # 融合得分：统计主导，玄学微调
+    # 融合得分：统计主导，玄学微调（玄学权重 3%）
     final_scores = {}
     for n in ALL_NUMBERS:
         final_scores[n] = stat_scores_norm[n] * STAT_POWER + fengshui_scores[n] * FENGSHUI_POWER
