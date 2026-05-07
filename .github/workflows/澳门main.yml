@@ -1,14 +1,16 @@
-name: 香港0.2版本自动更新与推送
+name: 香港自动预测
 
 on:
   schedule:
-    # 香港开奖时间一般为每天 21:30（香港时间），此处设为每天 14:00 UTC（即 22:00 北京时间）
-    - cron: '0 14 * * *'
-  workflow_dispatch:
+    # 香港六合彩通常每周二、四、六晚开奖，可在开奖后次日凌晨运行
+    # 这里设置为每天 UTC 20:00（北京时间凌晨4:00）
+    - cron: '0 20 * * *'
+  workflow_dispatch:   # 允许手动触发
 
 jobs:
-  update-predict:
+  predict:
     runs-on: ubuntu-latest
+
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
@@ -20,29 +22,13 @@ jobs:
 
       - name: 安装依赖
         run: |
-          python -m pip install --upgrade pip
-          pip install lightgbm scikit-learn numpy
+          pip install --upgrade pip
+          pip install pandas lightgbm xgboost optuna numpy
+          # 若有外部模块文件，此处无需额外安装
 
-      - name: 配置 PushPlus Token
-        run: echo "PUSHPLUS_TOKEN=${{ secrets.PUSHPLUS_TOKEN }}" >> $GITHUB_ENV
-
-      - name: 初始化数据库（如果不存在）
+      - name: 运行预测与同步
+        env:
+          PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
         run: |
-          if [ ! -f "macau_predict.db" ]; then
-            python macau_predict.py bootstrap
-          fi
-
-      - name: 同步最新开奖并生成预测
-        run: |
-          python macau_predict.py sync
-
-      - name: 显示结果并推送微信
-        run: |
+          python macau_predict.py sync --with-backtest
           python macau_predict.py show
-
-      - name: 上传数据库（可选，用于备份）
-        uses: actions/upload-artifact@v4
-        with:
-          name: macau-predict-db
-          path: macau_predict.db
-          retention-days: 7
