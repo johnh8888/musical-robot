@@ -83,6 +83,133 @@ def load_best_zodiac_params():
             return json.load(f)
     return {}
 
+
+class OnlineAdjuster:
+    """全自动在线调整：根据近期表现自动修正关键策略参数及权重"""
+    def __init__(self, conn=None):
+        self.conn = conn
+        self.single_temperature = 0.5
+        self.four_boost_strength = 0.4
+        self.w_single = 0.15
+        self.w_two = 0.20
+        self.w_three = 0.325
+        self.w_four = 0.325
+
+    def load_state(self):
+        if self.conn is None:
+            return
+        state = get_model_state(self.conn, "online_adjust_params")
+        if state:
+            try:
+                params = json.loads(state)
+                self.single_temperature = float(params.get("single_temperature", 0.5))
+                self.four_boost_strength = float(params.get("four_boost_strength", 0.4))
+                self.w_single = float(params.get("w_single", 0.15))
+                self.w_two = float(params.get("w_two", 0.20))
+                self.w_three = float(params.get("w_three", 0.325))
+                self.w_four = float(params.get("w_four", 0.325))
+            except Exception:
+                pass
+
+    def save_state(self):
+        if self.conn is None:
+            return
+        params = {
+            "single_temperature": self.single_temperature,
+            "four_boost_strength": self.four_boost_strength,
+            "w_single": self.w_single,
+            "w_two": self.w_two,
+            "w_three": self.w_three,
+            "w_four": self.w_four
+        }
+        set_model_state(self.conn, "online_adjust_params", json.dumps(params))
+
+    def adjust(self):
+        if self.conn is None:
+            return
+
+        one_rep = get_recent_single_zodiac_report(self.conn, lookback=10)
+        two_rep = get_recent_two_zodiac_report(self.conn, lookback=10)
+        three_rep = get_recent_three_zodiac_report(self.conn, lookback=10)
+        four_rep = get_recent_special_picks_report(self.conn, lookback=10)
+
+        rates = {
+            'single': one_rep.get('hit_rate', 0.0),
+            'two': two_rep.get('hit_rate', 0.0),
+            'three': three_rep.get('hit_rate', 0.0),
+            'four': four_rep.get('hit_rate', 0.0)
+        }
+        max_miss = {
+            'single': one_rep.get('max_miss_streak', 0),
+            'two': two_rep.get('max_miss_streak', 0),
+            'three': three_rep.get('max_miss_streak', 0),
+            'four': four_rep.get('max_miss_streak', 0)
+        }
+
+        if rates['single'] < 0.50 or max_miss['single'] > 2:
+            self.single_temperature = min(1.5, self.single_temperature + 0.1)
+        else:
+            self.single_temperature = max(0.3, self.single_temperature - 0.05)
+
+        if max_miss['four'] > 4 or rates['four'] < 0.30:
+            self.four_boost_strength = min(1.0, self.four_boost_strength + 0.08)
+        else:
+            self.four_boost_strength = max(0.2, self.four_boost_strength - 0.03)
+
+        weights = {
+            'single': self.w_single,
+            'two': self.w_two,
+            'three': self.w_three,
+            'four': self.w_four
+        }
+        targets = {
+            'single': (0.60, 2),
+            'two': (0.80, 2),
+            'three': (0.45, 4),
+            'four': (0.40, 4)
+        }
+        for key in weights:
+            target_rate, target_miss = targets[key]
+            rate_diff = rates[key] - target_rate
+            miss_diff = target_miss - max_miss[key]
+            score = rate_diff * 0.6 + miss_diff * 0.1
+            if score > 0:
+                weights[key] *= 0.97
+            else:
+                weights[key] *= 1.05
+
+        total = sum(weights.values())
+        for key in weights:
+            weights[key] /= total
+        for key in weights:
+            if weights[key] < 0.10:
+                weights[key] = 0.10
+            elif weights[key] > 0.45:
+                weights[key] = 0.45
+        total = sum(weights.values())
+        for key in weights:
+            weights[key] /= total
+
+        self.w_single = weights['single']
+        self.w_two = weights['two']
+        self.w_three = weights['three']
+        self.w_four = weights['four']
+
+        print(f"[在线调整] 温度={self.single_temperature:.2f}, 增强={self.four_boost_strength:.2f}, "
+              f"权重: 一肖={self.w_single:.3f}, 二肖={self.w_two:.3f}, 三肖={self.w_three:.3f}, 特五肖={self.w_four:.3f}")
+
+        if max_miss['four'] >= 1 and rates['four'] < 0.35:
+            self.w_four = min(0.45, self.w_four * 1.08)
+            self.four_boost_strength = min(1.5, self.four_boost_strength + 0.1)
+        if max_miss['four'] >= 1:
+            self.w_four = min(0.45, self.w_four * 1.08)
+            self.four_boost_strength = min(1.5, self.four_boost_strength + 0.10)
+
+        self.save_state()
+
+
+online_adjuster = OnlineAdjuster()
+
 def load_best_params():
     for path in (_BEST_PARAMS_PATH, _BEST_PARAMS_OTHER):
         if path.exists():
