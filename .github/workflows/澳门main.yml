@@ -1,15 +1,16 @@
-name: 香港自动预测
+name: 🤖 香港六合彩全自动接力优化与推荐
 
 on:
   schedule:
-    # 香港六合彩通常每周二、四、六晚开奖，可在开奖后次日凌晨运行
-    # 这里设置为每天 UTC 20:00（北京时间凌晨4:00）
-    - cron: '0 20 * * *'
-  workflow_dispatch:   # 允许手动触发
+    - cron: '30 2 * * *'              # 每天 UTC 2:30
+  workflow_dispatch:
 
 jobs:
-  predict:
+  auto-run:
     runs-on: ubuntu-latest
+    timeout-minutes: 360
+    permissions:
+      contents: write
 
     steps:
       - name: 检出代码
@@ -18,17 +19,71 @@ jobs:
       - name: 设置 Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: '3.11'
 
       - name: 安装依赖
-        run: |
-          pip install --upgrade pip
-          pip install pandas lightgbm xgboost optuna numpy
-          # 若有外部模块文件，此处无需额外安装
+        run: pip install numpy pandas optuna lightgbm xgboost scikit-learn zhdate torch
 
-      - name: 运行预测与同步
+      - name: 删除旧模型（防止残留干扰）
+        run: rm -f lgb_zodiac_model.pkl xgb_model.pkl lgb_model.pkl transformer_sp.pth
+
+      - name: 同步数据与增量回测
+        run: |
+          python macau_predict.py sync --with-backtest --require-continuity
+
+      - name: 清理旧日志并回溯特别号记录
+        run: |
+          python -c "
+          from macau_predict import *
+          conn = connect_db('hongkong_lottery.db')
+          init_db(conn)
+          conn.execute('DELETE FROM special_picks_log')
+          conn.commit()
+          backfill_special_picks_log(conn, max_issues=100)
+          conn.close()
+          "
+
+      - name: 三轮接力优化
         env:
+          PYTHONWARNINGS: ignore
+        run: |
+          for r in 1 2 3; do
+            python macau_predict.py auto-optimize \
+              --timeout-hours 1.8 --base-trials 600 \
+              2>&1 | grep -v "三肖回溯\|LightGBM.*warn\|sklearn.*warn\|DEBUG" || true
+          done
+
+      - name: 生成推荐并提交报告
+        env:
+          PYTHONWARNINGS: ignore
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
         run: |
-          python macau_predict.py sync --with-backtest
-          python macau_predict.py show
+          python -c "
+          from macau_predict import *
+          conn = connect_db('hongkong_lottery.db')
+          init_db(conn)
+          # 最终同步（防止期间有新数据）
+          try:
+              records = fetch_hk_mark_six_records(timeout=10, retries=2)
+              sync_from_records(conn, records, source='final')
+          except: pass
+          review_latest(conn)
+          generate_predictions(conn)
+          rec = get_final_recommendation(conn)
+          if rec:
+              (issue_no, _, special, _, _, _, _, _, _, z1, z2, zs, _, _, _, _) = rec
+              print(f'📅 {issue_no} | 一肖:{z1} | 二肖:{z2[0]},{z2[1]} | 三肖:{\"、\".join(get_three_zodiac_picks(conn))} | 特肖:{\"、\".join(zs)}')
+          "
+          python macau_predict.py show > report.txt 2>/dev/null
+          git config user.name "github-actions[bot]"
+          git config user.email "bot@github.com"
+          git add best_params_zodiac.json report.txt
+          git diff --staged --quiet || git commit -m "🤖 $(date +'%Y-%m-%d') 香港自动推荐"
+          git push
+
+      - name: 上传报告（可选）
+        uses: actions/upload-artifact@v4
+        with:
+          name: hk_report
+          path: report.txt
