@@ -4953,9 +4953,6 @@ def main() -> None:
             conn.close()
     args.func(args)
 
-# 全自动辅助
-import traceback
-
 def _auto_log(msg: str, error: bool = False):
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     level = "ERROR" if error else "INFO"
@@ -4968,6 +4965,7 @@ def _auto_log(msg: str, error: bool = False):
     except Exception:
         pass
 
+
 def _has_consecutive_failure(conn, threshold: int = 5) -> bool:
     rows = conn.execute("""
         SELECT hit_count FROM prediction_runs
@@ -4977,6 +4975,7 @@ def _has_consecutive_failure(conn, threshold: int = 5) -> bool:
     if len(rows) < threshold:
         return False
     return all(int(r["hit_count"] or 0) == 0 for r in rows)
+
 
 def _train_all_ml_models(conn):
     try:
@@ -5009,6 +5008,7 @@ def _train_all_ml_models(conn):
     except Exception as e:
         _auto_log(f"Transformer 训练失败: {e}", error=True)
 
+
 def _push_recommendation(conn):
     try:
         rec = get_final_recommendation(conn)
@@ -5029,6 +5029,7 @@ def _push_recommendation(conn):
     except Exception as e:
         _auto_log(f"推送失败: {e}", error=True)
         send_pushplus_notification("香港六合彩预测脚本出错", f"推送生成失败: {e}")
+
 
 def cmd_auto_pilot(args: argparse.Namespace) -> None:
     conn = connect_db(args.db)
@@ -5061,6 +5062,7 @@ def cmd_auto_pilot(args: argparse.Namespace) -> None:
         send_pushplus_notification("香港六合彩预测脚本错误", f"auto 执行失败:\n{traceback.format_exc()}")
     finally:
         conn.close()
+
 
 if __name__ == "__main__":
     main()
