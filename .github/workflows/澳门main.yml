@@ -29,7 +29,7 @@ jobs:
 
       - name: 同步数据与增量回测
         run: |
-          python macau_predict.py sync --with-backtest --require-continuity
+          python macau_predict.py --require-continuity sync --with-backtest
 
       - name: 清理旧日志并回溯特别号记录
         run: |
