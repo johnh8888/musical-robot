@@ -818,8 +818,9 @@ def parse_hk_mark_six_from_api(payload: dict) -> List[DrawRecord]:
         return records
 
     hk_data = None
+    hk_names = {"香港六合彩", "香港彩", "HK六合彩", "HK Mark Six"}
     for item in lottery_list:
-        if isinstance(item, dict) and item.get("name") == "香港六合彩":
+        if isinstance(item, dict) and str(item.get("name", "")).strip() in hk_names:
             hk_data = item
             break
     if not hk_data:
