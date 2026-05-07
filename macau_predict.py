@@ -10,7 +10,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
-import argparse, csv, io, json, math, os, re, socket, sqlite3, time, pickle, subprocess
+import argparse, json, math, os, re, socket, sqlite3, time, pickle, subprocess
 import pandas as pd
 from urllib.error import URLError
 from collections import Counter, defaultdict, deque
@@ -24,13 +24,6 @@ import random
 try:
     from history_utils import HistoryProvider, DrawRecord
 except Exception:
-    @dataclass
-    class DrawRecord:
-        issue_no: str
-        draw_date: str
-        numbers: List[int]
-        special_number: int
-
     class HistoryProvider:
         def __init__(self, conn: sqlite3.Connection):
             self.conn = conn
