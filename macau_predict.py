@@ -151,8 +151,8 @@ class OnlineAdjuster:
         else:
             self.single_temperature = max(0.3, self.single_temperature - 0.05)
 
-        if max_miss['four'] > 4 or rates['four'] < 0.30:
-            self.four_boost_strength = min(1.0, self.four_boost_strength + 0.08)
+        if max_miss['four'] > 3 or rates['four'] < 0.4:
+            self.four_boost_strength = min(1.5, self.four_boost_strength + 0.12)
         else:
             self.four_boost_strength = max(0.2, self.four_boost_strength - 0.03)
 
@@ -4415,7 +4415,7 @@ def auto_optimize_loop(conn, target_hit_rate=0.90, target_max_miss=1,
     dyn_single_w = online_adjuster.w_single
     dyn_two_w = online_adjuster.w_two
     dyn_three_w = online_adjuster.w_three
-    dyn_four_w = 0.55
+    dyn_four_w = 0.65
     start_time = time.time()
     timeout_seconds = timeout_hours * 3600
 
@@ -4510,7 +4510,7 @@ def auto_optimize_loop(conn, target_hit_rate=0.90, target_max_miss=1,
             return 0.0
         rates = {k: hits[k] / count for k in hits}
         three_extra_boost = 1.3
-        four_extra_boost = 3.5
+        four_extra_boost = 4.5
         score = (rates['single'] * dyn_single_w +
                  rates['two']    * dyn_two_w +
                  rates['three']  * dyn_three_w * three_extra_boost +
@@ -4520,7 +4520,7 @@ def auto_optimize_loop(conn, target_hit_rate=0.90, target_max_miss=1,
         score -= smooth_penalty(max_miss['single'], 1, 0.008)
         score -= smooth_penalty(max_miss['two'],    1, 0.008)
         score -= smooth_penalty(max_miss['three'], 3, 0.003)
-        score -= smooth_penalty(max_miss['four'],  1, 0.015)
+        score -= smooth_penalty(max_miss['four'],  0, 0.004)
         for k in rates:
             trial.set_user_attr(f"rate_{k}", round(rates[k], 4))
             trial.set_user_attr(f"max_miss_{k}", int(max_miss[k]))
