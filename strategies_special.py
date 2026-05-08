@@ -1,4 +1,4 @@
-# strategies_special.py - 特五肖策略（6窗口等权投票 + 连空保护）
+# strategies_special.py - 特五肖策略（连空保护阈值改为1）
 
 import json
 import math
@@ -108,7 +108,7 @@ def _compute_special_five_score(rows, recent_window=20):
     return scores
 
 def predict_strong_five(rows, params, miss_streak=0):
-    # 硬编码最优窗口（根据诊断结果）
+    # 硬编码最优窗口
     windows = [12, 16, 20, 32]
     votes = Counter()
     for w in windows:
@@ -117,14 +117,15 @@ def predict_strong_five(rows, params, miss_streak=0):
         picks = [ranked[i][0] for i in range(5)]
         votes.update(picks)
     final_picks = [z for z, _ in votes.most_common(5)]
-    # 连空保护
-    if miss_streak >= 2 and rows:
+    # 强连空保护：连空 ≥1 时，强制加入遗漏最长的2个生肖
+    if miss_streak >= 1 and rows:
         omission = _zodiac_omission_map(rows)
         coldest = sorted(omission, key=omission.get, reverse=True)[:2]
         for z in coldest:
             if z not in final_picks:
                 final_picks[-1] = z
                 break
+    # 连空 ≥1 时，同时加入最近一期特别号生肖
     if miss_streak >= 1 and rows:
         latest_z = get_zodiac_by_number(_row_special(rows[0]))
         if latest_z not in final_picks:
