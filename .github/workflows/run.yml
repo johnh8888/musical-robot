@@ -44,24 +44,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: 诊断一二生肖窗口并保存
-        run: |
-          python zodiac_main.py --diagnose
-          git add best_windows.json
-          git commit -m "Auto-update best windows" || echo "No changes"
-          git push || echo "Push failed"
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: 诊断特五肖窗口并保存
-        run: |
-          python special_only.py --diagnose
-          git add best_special_windows.json
-          git commit -m "Auto-update best special windows" || echo "No changes"
-          git push || echo "Push failed"
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
+      # 注意：不再运行诊断，直接使用已提交的最优窗口文件
       - name: 一二三生肖预测
         run: python zodiac_main.py --show
 
