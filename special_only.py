@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# special_only.py - 特五肖预测（使用最佳配置）
+# special_only.py - 特五肖预测（使用60%稳定配置）
 
 import argparse
 import json
