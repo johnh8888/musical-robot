@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# zodiac_main.py - 香港六合彩一二三生肖预测（权重0.4 + 最优窗口）
+# zodiac_main.py - 最终版（禁用XGBoost，窗口[8,10,18]）
 
 import argparse
 import json
@@ -12,11 +12,11 @@ from strategies_zodiac import (
     _zodiac_omission_map
 )
 
-# 最优窗口（根据诊断结果）
-OPTIMAL_WINDOWS = [8, 10, 12, 18, 20, 30]
-XGB_WEIGHT = 0.4   # 降低模型权重
+# 最优窗口（仅保留命中率最高的三个窗口）
+OPTIMAL_WINDOWS = [8, 10, 18]
+XGB_WEIGHT = 0.0   # 完全禁用 XGBoost
 
-def get_history_rows_as_list(limit=600):
+def get_history_rows_as_list(limit=1200):
     records = fetch_hk_records(limit=limit)
     rows = []
     for r in records:
@@ -110,16 +110,11 @@ def backtest_zodiac_stats(rows, lookback):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--show", action="store_true")
-    parser.add_argument("--diagnose", action="store_true")
     args = parser.parse_args()
 
-    rows = get_history_rows_as_list(limit=600)
+    rows = get_history_rows_as_list(limit=1200)
     if not rows:
         print("数据获取失败")
-        return
-
-    if args.diagnose:
-        print("诊断模式已弃用，请直接使用 --show")
         return
 
     if args.show:
