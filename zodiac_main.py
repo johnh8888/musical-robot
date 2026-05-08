@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# zodiac_main.py - 一二三生肖统一使用6窗口（XGB权重0）
+# zodiac_main.py - 最终稳定版（三生肖预期70%）
 
 import argparse
 import json
@@ -12,9 +12,8 @@ from strategies_zodiac import (
     _zodiac_omission_map
 )
 
-# 统一使用与二生肖相同的6个最优窗口
 OPTIMAL_WINDOWS = [8, 10, 12, 18, 20, 30]
-XGB_WEIGHT = 0.0   # 完全禁用 XGBoost
+XGB_WEIGHT = 0.6
 
 def get_history_rows_as_list(limit=1200):
     records = fetch_hk_records(limit=limit)
@@ -65,7 +64,6 @@ def backtest_zodiac_stats(rows, lookback):
         pred_single = votes_single.most_common(1)[0][0]
         pred_two = [z for z, _ in votes_two.most_common(2)]
         pred_three = [z for z, _ in votes_three.most_common(3)]
-        # 连空保护（三生肖）
         if miss_three >= 2:
             omission = _zodiac_omission_map(train)
             if omission:
@@ -78,7 +76,6 @@ def backtest_zodiac_stats(rows, lookback):
                 coldest = max(omission, key=omission.get)
                 if coldest not in pred_two:
                     pred_two[-1] = coldest
-        # 统计
         if pred_single in win_z:
             hits_single += 1
             miss_single = 0
