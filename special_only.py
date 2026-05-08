@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# special_only.py - 每天自动诊断特五肖最优窗口
+# special_only.py - 每日自动诊断特五肖最优窗口
 
 import argparse
 import json
@@ -98,7 +98,6 @@ def main():
 
     if args.show:
         best_windows = diagnose_best_windows(rows, lookback=40, top_k=4)
-        print(f"本次预测使用窗口: {best_windows}")
         votes = Counter()
         for w in best_windows:
             scores = _compute_special_five_score(rows, w)
