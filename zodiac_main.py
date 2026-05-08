@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-# zodiac_main.py - 香港六合彩一二三生肖预测
+# zodiac_main.py - 香港六合彩一二三生肖预测（修正版）
 
 import argparse
 import json
 from collections import Counter
 from common import fetch_hk_records, get_zodiac_by_number, next_issue, ZODIAC_MAP
-from strategies_zodiac import predict_strong_single, predict_strong_two, predict_strong_three_with_window
+from strategies_zodiac import predict_strong_single, predict_strong_two, predict_strong_three_with_window, _zodiac_omission_map
 
 def get_history_rows_as_list(limit=600):
     records = fetch_hk_records(limit=limit)
@@ -18,21 +18,6 @@ def get_history_rows_as_list(limit=600):
             "issue_no": r["issue_no"]
         })
     return rows
-
-def _zodiac_omission_map(rows):
-    """计算每个生肖的遗漏期数（基于 rows 列表）"""
-    omission = {z: len(rows) + 1 for z in ZODIAC_MAP}
-    for i, row in enumerate(rows):
-        nums = json.loads(row["numbers_json"])
-        sp = row["special_number"]
-        appeared = set()
-        for n in nums:
-            appeared.add(get_zodiac_by_number(n))
-        appeared.add(get_zodiac_by_number(sp))
-        for z in appeared:
-            if omission[z] > i + 1:
-                omission[z] = i + 1
-    return omission
 
 def backtest_zodiac_stats(rows, lookback):
     rows_rev = list(reversed(rows))
