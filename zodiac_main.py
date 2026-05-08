@@ -20,7 +20,7 @@ def get_history_rows_as_list(limit=600):
     return rows
 
 def _zodiac_omission_map(rows):
-    # 使用全局导入的 ZODIAC_MAP
+    """计算每个生肖的遗漏期数（基于 rows 列表）"""
     omission = {z: len(rows) + 1 for z in ZODIAC_MAP}
     for i, row in enumerate(rows):
         nums = json.loads(row["numbers_json"])
