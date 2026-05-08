@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-# special_only.py - 使用最优窗口（自动读取或默认）
+# special_only.py - 全自动版（自动诊断并缓存最优窗口）
 
 import argparse
 import json
 from collections import Counter
 from common import fetch_hk_records, get_zodiac_by_number, next_issue
-from strategies_special import predict_strong_five, get_special_number_recommendation, _compute_special_five_score
+from strategies_special import get_special_number_recommendation, _compute_special_five_score
 
-# 根据诊断结果手动设置的最优窗口（作为备选）
+ALL_WINDOWS = [12, 16, 20, 24, 28, 32]
 DEFAULT_WINDOWS = [12, 16, 20, 32]
 
 def get_history_rows_as_list(limit=600):
@@ -22,15 +22,53 @@ def get_history_rows_as_list(limit=600):
         })
     return rows
 
-def load_best_windows():
+def diagnose_windows(rows, lookback=40):
+    rows_rev = list(reversed(rows))
+    total = min(lookback, len(rows_rev) - 20)
+    if total <= 0:
+        return DEFAULT_WINDOWS
+    window_stats = {}
+    for w in ALL_WINDOWS:
+        hits = 0
+        miss_streak = 0
+        max_miss = 0
+        for i in range(total):
+            train = rows_rev[i+20:]
+            if len(train) < 20:
+                continue
+            actual = rows_rev[i]
+            actual_zod = get_zodiac_by_number(actual["special_number"])
+            # 单窗口评分
+            scores = _compute_special_five_score(train, w)
+            ranked = sorted(scores.items(), key=lambda x: -x[1])
+            picks = [ranked[i][0] for i in range(5)]
+            if actual_zod in picks:
+                hits += 1
+                miss_streak = 0
+            else:
+                miss_streak += 1
+                max_miss = max(max_miss, miss_streak)
+        hit_rate = hits / total if total > 0 else 0
+        window_stats[w] = {"hit_rate": hit_rate, "max_miss": max_miss}
+    sorted_windows = sorted(window_stats.items(), key=lambda x: (-x[1]["hit_rate"], x[1]["max_miss"]))
+    best_windows = [w for w, _ in sorted_windows[:4]]
+    best_windows.sort()
+    return best_windows
+
+def load_or_diagnose_windows(rows):
+    best_windows_file = "best_special_windows.json"
     try:
-        with open("best_special_windows.json", "r") as f:
+        with open(best_windows_file, "r") as f:
             windows = json.load(f)
             print(f"已加载最优窗口: {windows}")
             return windows
-    except:
-        print(f"未找到 best_special_windows.json，使用默认窗口: {DEFAULT_WINDOWS}")
-        return DEFAULT_WINDOWS
+    except FileNotFoundError:
+        print("未找到窗口缓存文件，正在自动诊断...")
+        windows = diagnose_windows(rows)
+        with open(best_windows_file, "w") as f:
+            json.dump(windows, f)
+        print(f"已诊断并保存最优窗口: {windows}")
+        return windows
 
 def backtest_special_zodiac(rows, lookback, windows):
     rows_rev = list(reversed(rows))
@@ -64,7 +102,6 @@ def backtest_special_zodiac(rows, lookback, windows):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--show", action="store_true")
-    parser.add_argument("--diagnose", action="store_true")
     args = parser.parse_args()
 
     rows = get_history_rows_as_list(limit=600)
@@ -72,13 +109,8 @@ def main():
         print("数据获取失败")
         return
 
-    if args.diagnose:
-        print("诊断模式已弃用，请直接使用 --show 读取已保存的最优窗口")
-        return
-
     if args.show:
-        windows = load_best_windows()
-        # 多窗口投票
+        windows = load_or_diagnose_windows(rows)
         votes = Counter()
         for w in windows:
             scores = _compute_special_five_score(rows, w)
