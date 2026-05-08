@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# special_only.py - 香港六合彩特别号+特五肖预测
+# special_only.py - 香港六合彩特别号+特五肖预测（修正版）
 
 import argparse
 import json
