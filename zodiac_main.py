@@ -1,138 +1,132 @@
-#!/usr/bin/env python3
-# zodiac_main.py - 升级版（更多窗口 + 强连空保护）
+# strategies_special.py - 特五肖策略（5窗口投票 + 连空保护）
 
-import argparse
 import json
+import math
 from collections import Counter
-from common import fetch_hk_records, get_zodiac_by_number, next_issue
-from strategies_zodiac import predict_strong_single, predict_strong_two, predict_strong_three_with_window, _zodiac_omission_map
+from typing import List, Dict, Tuple, Optional, Sequence
 
-def get_history_rows_as_list(limit=600):
-    records = fetch_hk_records(limit=limit)
-    rows = []
-    for r in records:
-        rows.append({
-            "numbers_json": json.dumps(r["numbers"]),
-            "special_number": r["special_number"],
-            "draw_date": r["draw_date"],
-            "issue_no": r["issue_no"]
-        })
-    return rows
+from common import ZODIAC_MAP, get_zodiac_by_number, ALL_NUMBERS
 
-def backtest_zodiac_stats(rows, lookback):
-    rows_rev = list(reversed(rows))
-    total = min(lookback, len(rows_rev) - 20)
-    if total <= 0:
-        return None
-    # 增加窗口数量：10个窗口，覆盖 8-30 范围
-    windows = [8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30]
-    hits_single = 0
-    hits_two = 0
-    hits_three = 0
-    miss_single = 0
-    max_miss_single = 0
-    miss_two = 0
-    max_miss_two = 0
-    miss_three = 0
-    max_miss_three = 0
-    for i in range(total):
-        train = rows_rev[i+20:]
-        if len(train) < 20:
+def _row_numbers(r):
+    try:
+        if isinstance(r, dict):
+            return json.loads(r["numbers_json"])
+        if hasattr(r, "keys") and "numbers_json" in r.keys():
+            return json.loads(r["numbers_json"])
+        return json.loads(r[0]) if isinstance(r[0], str) else r[0]
+    except:
+        return []
+
+def _row_special(r):
+    try:
+        if isinstance(r, dict):
+            return int(r["special_number"])
+        if hasattr(r, "keys") and "special_number" in r.keys():
+            return int(r["special_number"])
+        return int(r[1])
+    except:
+        return 0
+
+def _zodiac_omission_map(rows: Sequence) -> Dict[str, int]:
+    omission = {z: len(rows) + 1 for z in ZODIAC_MAP}
+    for i, row in enumerate(rows):
+        numbers = _row_numbers(row)
+        special = _row_special(row)
+        if not numbers:
             continue
-        actual = rows_rev[i]
-        win_main = json.loads(actual["numbers_json"])
-        win_sp = actual["special_number"]
-        win_z = {get_zodiac_by_number(n) for n in win_main}
-        win_z.add(get_zodiac_by_number(win_sp))
-        votes_single = Counter()
-        votes_two = Counter()
-        votes_three = Counter()
-        for w in windows:
-            pred_s = predict_strong_single(train, {"single_recent_window": w, "single_special_boost": 3.2})
-            votes_single[pred_s] += 1
-            picks_t = predict_strong_two(train, {"two_recent_window": w, "two_special_boost": 3.0})
-            votes_two.update(picks_t)
-            picks_th = predict_strong_three_with_window(train, w)
-            votes_three.update(picks_th)
-        pred_single = votes_single.most_common(1)[0][0]
-        pred_two = [z for z, _ in votes_two.most_common(2)]
-        pred_three = [z for z, _ in votes_three.most_common(3)]
-        # 连空保护：当连空 >=2 时，强制加入遗漏最长的生肖
-        if miss_three >= 2:
-            omission = _zodiac_omission_map(train)
-            if omission:
-                coldest_two = sorted(omission, key=omission.get, reverse=True)[:2]
-                new_three = [pred_three[0]] + [c for c in coldest_two if c != pred_three[0]]
-                pred_three = new_three[:3]
-        if miss_two >= 2:
-            omission = _zodiac_omission_map(train)
-            if omission:
-                coldest = max(omission, key=omission.get)
-                if coldest not in pred_two:
-                    pred_two[-1] = coldest
-        # 命中统计
-        if pred_single in win_z:
-            hits_single += 1
-            miss_single = 0
-        else:
-            miss_single += 1
-            max_miss_single = max(max_miss_single, miss_single)
-        if any(z in win_z for z in pred_two):
-            hits_two += 1
-            miss_two = 0
-        else:
-            miss_two += 1
-            max_miss_two = max(max_miss_two, miss_two)
-        hit_cnt = sum(1 for z in pred_three if z in win_z)
-        if hit_cnt >= 2:
-            hits_three += 1
-            miss_three = 0
-        else:
-            miss_three += 1
-            max_miss_three = max(max_miss_three, miss_three)
-    return {
-        "single_hit_rate": hits_single / total, "single_max_miss": max_miss_single,
-        "two_hit_rate": hits_two / total, "two_max_miss": max_miss_two,
-        "three_hit_rate": hits_three / total, "three_max_miss": max_miss_three
-    }
+        appeared = set()
+        for n in numbers:
+            appeared.add(get_zodiac_by_number(n))
+        if special != 0:
+            appeared.add(get_zodiac_by_number(special))
+        for z in appeared:
+            if omission[z] > i + 1:
+                omission[z] = i + 1
+    return omission
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--show", action="store_true")
-    args = parser.parse_args()
+def get_special_number_recommendation(rows, top_n=3, main_pool=None, recent_window=30):
+    if len(rows) < 5:
+        return 1, [2, 3]
+    recent_specials = [_row_special(r) for r in rows[:recent_window]]
+    omission = {}
+    for i, sp in enumerate(recent_specials):
+        if sp not in omission:
+            omission[sp] = i + 1
+    recent_3_set = set(recent_specials[:3])
+    main_set = set(main_pool) if main_pool else set()
+    tail_counts = Counter([sp % 10 for sp in recent_specials[:40]])
+    coldest_tail = min(tail_counts, key=lambda t: tail_counts[t]) if tail_counts else 0
+    scores = {}
+    for n in ALL_NUMBERS:
+        omit = omission.get(n, 30)
+        score = math.log(omit + 1) * 2.0
+        neighbors = {n-1, n-2, n-3, n+1, n+2, n+3} & set(ALL_NUMBERS)
+        if neighbors:
+            min_omit = min(omission.get(m, 30) for m in neighbors)
+            neighbor_score = 1.0 - (min_omit - 1) * 0.03
+            neighbor_score = max(0.0, min(1.0, neighbor_score))
+            score += neighbor_score * 2.5
+        if n in recent_3_set:
+            score *= 0.6
+        if main_set and n in main_set:
+            score *= 0.7
+        if n % 10 == coldest_tail:
+            score += 3.0
+        scores[n] = max(0.0, score)
+    sorted_nums = sorted(scores.items(), key=lambda x: -x[1])
+    primary = sorted_nums[0][0]
+    defenses = [n for n, _ in sorted_nums[1:4]]
+    return primary, defenses[:top_n-1]
 
-    rows = get_history_rows_as_list(limit=600)
-    if not rows:
-        print("数据获取失败")
-        return
+def _compute_special_five_score(rows, recent_window=20):
+    scores = {z: 0.0 for z in ZODIAC_MAP}
+    specials = [_row_special(r) for r in rows]
+    seq = [get_zodiac_by_number(sp) for sp in specials]
+    n = len(seq)
+    if n == 0:
+        return {z: 1.0 for z in ZODIAC_MAP}
+    for i, z in enumerate(seq[:recent_window]):
+        w = math.exp(-i / 15.0)
+        scores[z] += 5.0 * w
+    omission = {z: 0 for z in ZODIAC_MAP}
+    for i, z in enumerate(seq):
+        if omission[z] == 0:
+            omission[z] = i + 1
+    for z, omit in omission.items():
+        scores[z] += math.log(omit + 1) * 2.0
+    # 主号互补
+    main_z = Counter()
+    for row in rows[:15]:
+        for n in _row_numbers(row):
+            main_z[get_zodiac_by_number(n)] += 1
+    total_main = sum(main_z.values()) or 1
+    avg_freq = 1.0 / len(ZODIAC_MAP)
+    for z in ZODIAC_MAP:
+        freq = main_z.get(z, 0) / total_main
+        if freq < avg_freq * 0.6:
+            scores[z] += 5.0
+    return scores
 
-    if args.show:
-        windows = [8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30]
-        votes_single = Counter()
-        votes_two = Counter()
-        votes_three = Counter()
-        for w in windows:
-            pred_s = predict_strong_single(rows, {"single_recent_window": w, "single_special_boost": 3.2})
-            votes_single[pred_s] += 1
-            picks_t = predict_strong_two(rows, {"two_recent_window": w, "two_special_boost": 3.0})
-            votes_two.update(picks_t)
-            picks_th = predict_strong_three_with_window(rows, w)
-            votes_three.update(picks_th)
-        single = votes_single.most_common(1)[0][0]
-        two = [z for z, _ in votes_two.most_common(2)]
-        three = [z for z, _ in votes_three.most_common(3)]
-        latest_issue = rows[0]["issue_no"]
-        pred_issue = next_issue(latest_issue)
-        print(f"预测期号: {pred_issue}")
-        print(f"一生肖: {single}")
-        print(f"二生肖: {'、'.join(two)}")
-        print(f"三生肖: {'、'.join(three)}")
-        print("\n近10期回测统计：")
-        stats10 = backtest_zodiac_stats(rows, 10)
-        if stats10:
-            print(f"一生肖: 命中率 {stats10['single_hit_rate']:.1%}, 最大连空 {stats10['single_max_miss']}")
-            print(f"二生肖: 命中率 {stats10['two_hit_rate']:.1%}, 最大连空 {stats10['two_max_miss']}")
-            print(f"三生肖: 命中率 {stats10['three_hit_rate']:.1%}, 最大连空 {stats10['three_max_miss']}")
-
-if __name__ == "__main__":
-    main()
+def predict_strong_five(rows, params, miss_streak=0):
+    # 使用5个窗口投票（10,15,20,25,30）
+    windows = [10, 15, 20, 25, 30]
+    votes = Counter()
+    for w in windows:
+        scores = _compute_special_five_score(rows, w)
+        ranked = sorted(scores.items(), key=lambda x: -x[1])
+        picks = [ranked[i][0] for i in range(5)]
+        votes.update(picks)
+    final_picks = [z for z, _ in votes.most_common(5)]
+    # 连空保护：当 miss_streak >= 2 时，强制加入遗漏最长的两个生肖
+    if miss_streak >= 2 and rows:
+        omission = _zodiac_omission_map(rows)
+        coldest = sorted(omission, key=omission.get, reverse=True)[:2]
+        for z in coldest:
+            if z not in final_picks:
+                final_picks[-1] = z
+    # 当 miss_streak >= 1 时，加入最近一期特别号生肖
+    if miss_streak >= 1 and rows:
+        latest_z = get_zodiac_by_number(_row_special(rows[0]))
+        if latest_z not in final_picks:
+            final_picks[-1] = latest_z
+    return final_picks[:5]
