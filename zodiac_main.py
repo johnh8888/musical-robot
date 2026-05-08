@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-# zodiac_main.py - 香港六合彩一二三生肖预测（修正版）
+# zodiac_main.py - 升级版（更多窗口 + 强连空保护）
 
 import argparse
 import json
 from collections import Counter
-from common import fetch_hk_records, get_zodiac_by_number, next_issue, ZODIAC_MAP
+from common import fetch_hk_records, get_zodiac_by_number, next_issue
 from strategies_zodiac import predict_strong_single, predict_strong_two, predict_strong_three_with_window, _zodiac_omission_map
 
 def get_history_rows_as_list(limit=600):
@@ -24,6 +24,7 @@ def backtest_zodiac_stats(rows, lookback):
     total = min(lookback, len(rows_rev) - 20)
     if total <= 0:
         return None
+    # 增加窗口数量：10个窗口，覆盖 8-30 范围
     windows = [8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30]
     hits_single = 0
     hits_two = 0
@@ -56,7 +57,7 @@ def backtest_zodiac_stats(rows, lookback):
         pred_single = votes_single.most_common(1)[0][0]
         pred_two = [z for z, _ in votes_two.most_common(2)]
         pred_three = [z for z, _ in votes_three.most_common(3)]
-        # 连空保护（三生肖）
+        # 连空保护：当连空 >=2 时，强制加入遗漏最长的生肖
         if miss_three >= 2:
             omission = _zodiac_omission_map(train)
             if omission:
