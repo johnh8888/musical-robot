@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # common.py - 香港六合彩公共模块
 
+import sqlite3  # 添加缺失导入
 import json
 import re
 import socket
@@ -37,7 +38,6 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 def connect_db(db_path: str = DB_PATH_DEFAULT) -> sqlite3.Connection:
-    import sqlite3
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
