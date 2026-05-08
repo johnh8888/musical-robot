@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# special_only.py - 升级版（5窗口投票 + 连空保护）
+# special_only.py - 特五肖预测（6窗口投票 + 连空保护）
 
 import argparse
 import json
@@ -53,7 +53,7 @@ def main():
         return
 
     if args.show:
-        # 实际预测时 miss_streak 应为最近连空次数，这里简化为0（可扩展）
+        # 实际预测时 miss_streak 应从之前的历史连空状态获取，这里简化为0（可拓展）
         miss_streak = 0
         picks = predict_strong_five(rows, {"four_recent_special_window": 20}, miss_streak)
         sp, defenses = get_special_number_recommendation(rows, top_n=3, recent_window=30)
