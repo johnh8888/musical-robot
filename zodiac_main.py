@@ -4,7 +4,7 @@
 import argparse
 import json
 from collections import Counter
-from common import fetch_hk_records, get_zodiac_by_number, next_issue
+from common import fetch_hk_records, get_zodiac_by_number, next_issue, ZODIAC_MAP
 from strategies_zodiac import predict_strong_single, predict_strong_two, predict_strong_three_with_window
 
 def get_history_rows_as_list(limit=600):
@@ -18,6 +18,21 @@ def get_history_rows_as_list(limit=600):
             "issue_no": r["issue_no"]
         })
     return rows
+
+def _zodiac_omission_map(rows):
+    # 使用全局导入的 ZODIAC_MAP
+    omission = {z: len(rows) + 1 for z in ZODIAC_MAP}
+    for i, row in enumerate(rows):
+        nums = json.loads(row["numbers_json"])
+        sp = row["special_number"]
+        appeared = set()
+        for n in nums:
+            appeared.add(get_zodiac_by_number(n))
+        appeared.add(get_zodiac_by_number(sp))
+        for z in appeared:
+            if omission[z] > i + 1:
+                omission[z] = i + 1
+    return omission
 
 def backtest_zodiac_stats(rows, lookback):
     rows_rev = list(reversed(rows))
@@ -58,7 +73,7 @@ def backtest_zodiac_stats(rows, lookback):
         pred_three = [z for z, _ in votes_three.most_common(3)]
         # 连空保护（三生肖）
         if miss_three >= 2:
-            omission = _zodiac_omission_map(train)  # 需要定义，可复用原函数
+            omission = _zodiac_omission_map(train)
             if omission:
                 coldest_two = sorted(omission, key=omission.get, reverse=True)[:2]
                 new_three = [pred_three[0]] + [c for c in coldest_two if c != pred_three[0]]
@@ -94,20 +109,6 @@ def backtest_zodiac_stats(rows, lookback):
         "two_hit_rate": hits_two / total, "two_max_miss": max_miss_two,
         "three_hit_rate": hits_three / total, "three_max_miss": max_miss_three
     }
-
-def _zodiac_omission_map(rows):
-    omission = {z: len(rows) + 1 for z in ZODIAC_MAP}
-    for i, row in enumerate(rows):
-        nums = json.loads(row["numbers_json"])
-        sp = row["special_number"]
-        appeared = set()
-        for n in nums:
-            appeared.add(get_zodiac_by_number(n))
-        appeared.add(get_zodiac_by_number(sp))
-        for z in appeared:
-            if omission[z] > i + 1:
-                omission[z] = i + 1
-    return omission
 
 def main():
     parser = argparse.ArgumentParser()
