@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# zodiac_main.py - 一二三生肖预测（硬编码最优窗口）
+# zodiac_main.py - 每天自动诊断并选择最优窗口
 
 import argparse
 import json
@@ -12,8 +12,7 @@ from strategies_zodiac import (
     _zodiac_omission_map
 )
 
-# 根据诊断结果硬编码最优窗口
-OPTIMAL_WINDOWS = [8, 10, 12, 18, 20, 30]
+ALL_WINDOWS = list(range(8, 33, 2))   # [8,10,...,32]
 
 def get_history_rows_as_list(limit=600):
     records = fetch_hk_records(limit=limit)
@@ -27,12 +26,51 @@ def get_history_rows_as_list(limit=600):
         })
     return rows
 
-def backtest_zodiac_stats(rows, lookback):
+def diagnose_best_windows(rows, lookback=40, top_k=6):
+    """基于最近 lookback 期数据，评估每个窗口并返回最优的 top_k 个窗口"""
+    rows_rev = list(reversed(rows))
+    total = min(lookback, len(rows_rev) - 20)
+    if total <= 0:
+        return ALL_WINDOWS[:top_k]
+    window_stats = {}
+    for w in ALL_WINDOWS:
+        hits = 0
+        miss_streak = 0
+        max_miss = 0
+        for i in range(total):
+            train = rows_rev[i+20:]
+            if len(train) < 20:
+                continue
+            actual = rows_rev[i]
+            win_main = json.loads(actual["numbers_json"])
+            win_sp = actual["special_number"]
+            win_z = {get_zodiac_by_number(n) for n in win_main}
+            win_z.add(get_zodiac_by_number(win_sp))
+            picks = predict_strong_two(train, {"two_recent_window": w, "two_special_boost": 3.0}, xgb_weight=0.6)
+            hit = any(z in win_z for z in picks)
+            if hit:
+                hits += 1
+                miss_streak = 0
+            else:
+                miss_streak += 1
+                max_miss = max(max_miss, miss_streak)
+        hit_rate = hits / total if total > 0 else 0
+        window_stats[w] = {"hit_rate": hit_rate, "max_miss": max_miss}
+    sorted_windows = sorted(window_stats.items(), key=lambda x: (-x[1]["hit_rate"], x[1]["max_miss"]))
+    best_windows = [w for w, _ in sorted_windows[:top_k]]
+    best_windows.sort()
+    # 打印诊断结果
+    print("=== 自动诊断各窗口性能（二生肖） ===")
+    for w, stats in window_stats.items():
+        print(f"窗口 {w:2d}: 命中率 {stats['hit_rate']*100:.1f}%，最大连空 {stats['max_miss']}")
+    print(f"今日最优 {top_k} 个窗口: {best_windows}")
+    return best_windows
+
+def backtest_zodiac_stats(rows, lookback, windows):
     rows_rev = list(reversed(rows))
     total = min(lookback, len(rows_rev) - 20)
     if total <= 0:
         return None
-    windows = OPTIMAL_WINDOWS
     hits_single = 0
     hits_two = 0
     hits_three = 0
@@ -107,7 +145,6 @@ def backtest_zodiac_stats(rows, lookback):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--show", action="store_true")
-    parser.add_argument("--diagnose", action="store_true", help="运行诊断（可选）")
     args = parser.parse_args()
 
     rows = get_history_rows_as_list(limit=600)
@@ -115,18 +152,14 @@ def main():
         print("数据获取失败")
         return
 
-    if args.diagnose:
-        # 诊断模式（保留供手动使用）
-        print("诊断模式已弃用，最优窗口已硬编码")
-        return
-
     if args.show:
-        windows = OPTIMAL_WINDOWS
-        print(f"使用最优窗口: {windows}")
+        # 每天自动诊断并选择最优窗口
+        best_windows = diagnose_best_windows(rows, lookback=40, top_k=6)
+        print(f"本次预测使用窗口: {best_windows}")
         votes_single = Counter()
         votes_two = Counter()
         votes_three = Counter()
-        for w in windows:
+        for w in best_windows:
             pred_s = predict_strong_single(rows, {"single_recent_window": w, "single_special_boost": 3.2}, xgb_weight=0.6)
             votes_single[pred_s] += 1
             picks_t = predict_strong_two(rows, {"two_recent_window": w, "two_special_boost": 3.0}, xgb_weight=0.6)
@@ -143,7 +176,7 @@ def main():
         print(f"二生肖: {'、'.join(two)}")
         print(f"三生肖: {'、'.join(three)}")
         print("\n近10期回测统计：")
-        stats10 = backtest_zodiac_stats(rows, 10)
+        stats10 = backtest_zodiac_stats(rows, 10, best_windows)
         if stats10:
             print(f"一生肖: 命中率 {stats10['single_hit_rate']:.1%}, 最大连空 {stats10['single_max_miss']}")
             print(f"二生肖: 命中率 {stats10['two_hit_rate']:.1%}, 最大连空 {stats10['two_max_miss']}")
