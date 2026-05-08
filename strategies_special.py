@@ -1,4 +1,4 @@
-# strategies_special.py - 特五肖多窗口投票（命中率50-60%）
+# strategies_special.py - 特五肖自适应策略
 
 import json
 import math
@@ -96,8 +96,20 @@ def _compute_special_five_score(rows, recent_window=20):
         scores[z] += math.log(omit + 1) * 2.0
     return scores
 
-def predict_strong_five(rows, params, miss_streak=0):
-    windows = [12, 16, 20, 32]
+def predict_strong_five(rows, params, miss_streak=0, recent_hit_rate=None):
+    """
+    recent_hit_rate: 最近10期特五肖命中率（由外部传入）
+    如果命中率过低（<0.5），则使用激进策略（全冷门 + 最新特别号）
+    """
+    # 激进策略：全冷门 + 最新特别号
+    if recent_hit_rate is not None and recent_hit_rate < 0.5:
+        omission = _zodiac_omission_map(rows)
+        coldest = sorted(omission, key=omission.get, reverse=True)[:4]
+        latest_z = get_zodiac_by_number(_row_special(rows[0]))
+        final_picks = list(dict.fromkeys(coldest + [latest_z]))[:5]
+        return final_picks
+    # 正常策略：多窗口投票
+    windows = [12, 20, 28]   # 曾达到70%时的窗口
     votes = Counter()
     for w in windows:
         scores = _compute_special_five_score(rows, w)
@@ -105,11 +117,16 @@ def predict_strong_five(rows, params, miss_streak=0):
         picks = [ranked[i][0] for i in range(5)]
         votes.update(picks)
     final_picks = [z for z, _ in votes.most_common(5)]
-    if miss_streak >= 1 and rows:
+    # 连空保护（保留原逻辑）
+    if miss_streak >= 2 and rows:
         omission = _zodiac_omission_map(rows)
         coldest = sorted(omission, key=omission.get, reverse=True)[:2]
         for z in coldest:
             if z not in final_picks:
                 final_picks[-1] = z
                 break
+    if miss_streak >= 1 and rows:
+        latest_z = get_zodiac_by_number(_row_special(rows[0]))
+        if latest_z not in final_picks:
+            final_picks[-1] = latest_z
     return final_picks[:5]
