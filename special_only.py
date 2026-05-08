@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# special_only.py - 特五肖预测（单窗口12，保留回测）
+# special_only.py - 特五肖预测（使用多窗口投票）
 
 import argparse
 import json
