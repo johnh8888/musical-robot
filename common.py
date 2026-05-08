@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 # common.py - 香港六合彩公共模块
 
-import sqlite3
 import json
 import re
 import socket
@@ -10,12 +9,12 @@ import urllib.request
 import subprocess
 import os
 import math
+import sqlite3          # 添加这一行
 from urllib.error import URLError
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple
 from datetime import datetime, timezone
 from collections import Counter
-
 
 ALL_NUMBERS = list(range(1, 50))
 ZODIAC_MAP = {
