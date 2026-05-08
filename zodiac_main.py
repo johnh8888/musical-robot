@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-# zodiac_main.py - 香港六合彩一二三生肖预测（修正，无需外部导入）
+# zodiac_main.py - 香港六合彩一二三生肖预测（独立版）
 
 import argparse
 import json
-import sys
 from collections import Counter
 from common import fetch_hk_records, get_zodiac_by_number, next_issue
 from strategies_zodiac import (
@@ -62,7 +61,7 @@ def backtest_zodiac_stats(rows, lookback):
         pred_single = votes_single.most_common(1)[0][0]
         pred_two = [z for z, _ in votes_two.most_common(2)]
         pred_three = [z for z, _ in votes_three.most_common(3)]
-        # 连空保护（三生肖）
+        # 连空保护
         if miss_three >= 2:
             omission = _zodiac_omission_map(train)
             if omission:
@@ -96,9 +95,12 @@ def backtest_zodiac_stats(rows, lookback):
             miss_three += 1
             max_miss_three = max(max_miss_three, miss_three)
     return {
-        "single_hit_rate": hits_single / total, "single_max_miss": max_miss_single,
-        "two_hit_rate": hits_two / total, "two_max_miss": max_miss_two,
-        "three_hit_rate": hits_three / total, "three_max_miss": max_miss_three
+        "single_hit_rate": hits_single / total,
+        "single_max_miss": max_miss_single,
+        "two_hit_rate": hits_two / total,
+        "two_max_miss": max_miss_two,
+        "three_hit_rate": hits_three / total,
+        "three_max_miss": max_miss_three
     }
 
 def main():
