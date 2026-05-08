@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# common.py - 香港六合彩公共模块（全自动版）
+# common.py - 香港六合彩公共模块（支持本地 CSV 合并）
 
 import json
 import re
@@ -9,6 +9,7 @@ import urllib.request
 import subprocess
 import os
 import math
+import csv
 from urllib.error import URLError
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple
@@ -60,7 +61,34 @@ def next_issue(issue_no: str) -> str:
     except:
         return issue_no
 
-# ========== API 数据获取 (香港六合彩) ==========
+# ========== 本地 CSV 加载 ==========
+def load_local_history_csv(csv_path="hk_full_history.csv"):
+    records = []
+    if not Path(csv_path).exists():
+        return records
+    with open(csv_path, "r", encoding="utf-8") as f:
+        reader = csv.reader(f)
+        next(reader, None)  # 跳过表头（如果有）
+        for row in reader:
+            if len(row) < 9:
+                continue
+            issue_no = row[0].strip()
+            draw_date = row[1].strip()
+            try:
+                numbers = [int(x) for x in row[2:8]]
+                special = int(row[8])
+            except:
+                continue
+            records.append({
+                "issue_no": issue_no,
+                "draw_date": draw_date,
+                "numbers": numbers,
+                "special_number": special,
+            })
+    print(f"从本地 CSV 加载到 {len(records)} 期历史数据")
+    return records
+
+# ========== API 数据获取（香港六合彩） ==========
 def _parse_numbers_internal(value: str) -> List[int]:
     out = []
     for token in value.replace("，", ",").split(","):
@@ -86,7 +114,7 @@ def _parse_date_internal(date_text: str) -> Optional[str]:
             pass
     return None
 
-def fetch_hk_records(limit: int = 600) -> List[Dict]:
+def fetch_hk_records_from_api(limit: int = 600) -> List[Dict]:
     req = urllib.request.Request(
         HK_API_URL,
         headers={"User-Agent": "Mozilla/5.0 (compatible; hk-local/1.0)", "Accept": "application/json"},
@@ -150,6 +178,23 @@ def _parse_hk_payload(payload: dict, limit: int) -> List[Dict]:
         sorted_records = sorted_records[:limit]
     print(f"从API获取到 {len(sorted_records)} 期数据，最新期号: {sorted_records[0]['issue_no'] if sorted_records else '无'}")
     return sorted_records
+
+def fetch_hk_records(limit: int = 1200) -> List[Dict]:
+    """合并本地 CSV 和在线 API 数据，按期号降序返回最新 limit 条"""
+    all_records = load_local_history_csv()
+    try:
+        online_records = fetch_hk_records_from_api(limit=600)
+        existing_issues = {r["issue_no"] for r in all_records}
+        for r in online_records:
+            if r["issue_no"] not in existing_issues:
+                all_records.append(r)
+    except Exception as e:
+        print(f"在线获取失败: {e}，仅使用本地数据")
+    all_records.sort(key=lambda x: x["issue_no"], reverse=True)
+    if limit > 0:
+        all_records = all_records[:limit]
+    print(f"合并后共 {len(all_records)} 期，最新期号: {all_records[0]['issue_no'] if all_records else '无'}")
+    return all_records
 
 # ========== 参数管理与 Git 推送 ==========
 def load_params(file_name: str) -> dict:
