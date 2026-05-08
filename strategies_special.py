@@ -1,4 +1,4 @@
-# strategies_special.py - 特五肖（多窗口投票，连空保护阈值1）
+# strategies_special.py - 特五肖多窗口投票（命中率50-60%）
 
 import json
 import math
@@ -97,7 +97,6 @@ def _compute_special_five_score(rows, recent_window=20):
     return scores
 
 def predict_strong_five(rows, params, miss_streak=0):
-    # 使用多窗口投票（诊断显示窗口12最好，但投票可增加稳定性）
     windows = [12, 16, 20, 32]
     votes = Counter()
     for w in windows:
@@ -106,7 +105,6 @@ def predict_strong_five(rows, params, miss_streak=0):
         picks = [ranked[i][0] for i in range(5)]
         votes.update(picks)
     final_picks = [z for z, _ in votes.most_common(5)]
-    # 连空保护：连空 ≥1 时强制加入遗漏最长的生肖
     if miss_streak >= 1 and rows:
         omission = _zodiac_omission_map(rows)
         coldest = sorted(omission, key=omission.get, reverse=True)[:2]
