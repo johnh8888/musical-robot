@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# common.py - 香港六合彩公共模块
+# common.py - 香港六合彩公共模块（全自动版）
 
 import json
 import re
@@ -9,7 +9,6 @@ import urllib.request
 import subprocess
 import os
 import math
-import sqlite3          # 添加这一行
 from urllib.error import URLError
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple
@@ -36,12 +35,6 @@ API_RETRY_BACKOFF_SECONDS = 2.0
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
-
-def connect_db(db_path: str = DB_PATH_DEFAULT) -> sqlite3.Connection:
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    return conn
 
 def get_zodiac_by_number(number: int) -> str:
     for zodiac, nums in ZODIAC_MAP.items():
