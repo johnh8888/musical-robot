@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# zodiac_main.py - 最终版（禁用XGBoost，窗口[8,10,18]）
+# zodiac_main.py - 一二三生肖统一使用6窗口（XGB权重0）
 
 import argparse
 import json
@@ -12,8 +12,8 @@ from strategies_zodiac import (
     _zodiac_omission_map
 )
 
-# 最优窗口（仅保留命中率最高的三个窗口）
-OPTIMAL_WINDOWS = [8, 10, 18]
+# 统一使用与二生肖相同的6个最优窗口
+OPTIMAL_WINDOWS = [8, 10, 12, 18, 20, 30]
 XGB_WEIGHT = 0.0   # 完全禁用 XGBoost
 
 def get_history_rows_as_list(limit=1200):
@@ -65,7 +65,7 @@ def backtest_zodiac_stats(rows, lookback):
         pred_single = votes_single.most_common(1)[0][0]
         pred_two = [z for z, _ in votes_two.most_common(2)]
         pred_three = [z for z, _ in votes_three.most_common(3)]
-        # 连空保护
+        # 连空保护（三生肖）
         if miss_three >= 2:
             omission = _zodiac_omission_map(train)
             if omission:
@@ -119,7 +119,7 @@ def main():
 
     if args.show:
         windows = OPTIMAL_WINDOWS
-        print(f"使用最优窗口: {windows}, XGB权重: {XGB_WEIGHT}")
+        print(f"使用窗口: {windows}, XGB权重: {XGB_WEIGHT}")
         votes_single = Counter()
         votes_two = Counter()
         votes_three = Counter()
