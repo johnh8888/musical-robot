@@ -1,4 +1,4 @@
-# strategies_special.py - 特五肖60%稳定版（3窗口投票，轻度连空保护）
+# strategies_special.py - 特五肖基础评分函数
 
 import json
 import math
@@ -78,7 +78,8 @@ def get_special_number_recommendation(rows, top_n=3, main_pool=None, recent_wind
     defenses = [n for n, _ in sorted_nums[1:4]]
     return primary, defenses[:top_n-1]
 
-def _compute_special_five_score(rows, recent_window=20):
+def compute_special_five_score(rows, recent_window=20):
+    """特五肖评分，用于窗口评估"""
     scores = {z: 0.0 for z in ZODIAC_MAP}
     specials = [_row_special(r) for r in rows]
     seq = [get_zodiac_by_number(sp) for sp in specials]
@@ -95,22 +96,3 @@ def _compute_special_five_score(rows, recent_window=20):
     for z, omit in omission.items():
         scores[z] += math.log(omit + 1) * 2.0
     return scores
-
-def predict_strong_five(rows, params, miss_streak=0):
-    # 3窗口投票（12,20,28）—— 历史达到60%的配置
-    windows = [12, 20, 28]
-    votes = Counter()
-    for w in windows:
-        scores = _compute_special_five_score(rows, w)
-        ranked = sorted(scores.items(), key=lambda x: -x[1])
-        picks = [ranked[i][0] for i in range(5)]
-        votes.update(picks)
-    final_picks = [z for z, _ in votes.most_common(5)]
-    # 轻度连空保护：仅当连续2期错误时，强制加入遗漏最长的1个生肖
-    if miss_streak >= 2 and rows:
-        omission = _zodiac_omission_map(rows)
-        if omission:
-            coldest = max(omission, key=omission.get)
-            if coldest not in final_picks:
-                final_picks[-1] = coldest
-    return final_picks[:5]
