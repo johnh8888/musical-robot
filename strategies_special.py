@@ -1,4 +1,4 @@
-# strategies_special.py - 特五肖（单窗口12，连空保护阈值1）
+# strategies_special.py - 特五肖（多窗口投票，连空保护阈值1）
 
 import json
 import math
@@ -78,7 +78,7 @@ def get_special_number_recommendation(rows, top_n=3, main_pool=None, recent_wind
     defenses = [n for n, _ in sorted_nums[1:4]]
     return primary, defenses[:top_n-1]
 
-def _compute_special_five_score(rows, recent_window=12):
+def _compute_special_five_score(rows, recent_window=20):
     scores = {z: 0.0 for z in ZODIAC_MAP}
     specials = [_row_special(r) for r in rows]
     seq = [get_zodiac_by_number(sp) for sp in specials]
@@ -97,17 +97,21 @@ def _compute_special_five_score(rows, recent_window=12):
     return scores
 
 def predict_strong_five(rows, params, miss_streak=0):
-    # 固定使用窗口12（命中率最高）
-    scores = _compute_special_five_score(rows, 12)
-    ranked = sorted(scores.items(), key=lambda x: -x[1])
-    picks = [ranked[i][0] for i in range(5)]
+    # 使用多窗口投票（诊断显示窗口12最好，但投票可增加稳定性）
+    windows = [12, 16, 20, 32]
+    votes = Counter()
+    for w in windows:
+        scores = _compute_special_five_score(rows, w)
+        ranked = sorted(scores.items(), key=lambda x: -x[1])
+        picks = [ranked[i][0] for i in range(5)]
+        votes.update(picks)
+    final_picks = [z for z, _ in votes.most_common(5)]
     # 连空保护：连空 ≥1 时强制加入遗漏最长的生肖
     if miss_streak >= 1 and rows:
         omission = _zodiac_omission_map(rows)
-        # 取遗漏最长的2个生肖，尝试替换最后一个
         coldest = sorted(omission, key=omission.get, reverse=True)[:2]
         for z in coldest:
-            if z not in picks:
-                picks[-1] = z
+            if z not in final_picks:
+                final_picks[-1] = z
                 break
-    return picks[:5]
+    return final_picks[:5]
