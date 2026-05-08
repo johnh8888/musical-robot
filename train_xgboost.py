@@ -1,4 +1,5 @@
 # train_xgboost.py - 训练 XGBoost 模型（香港版）
+
 import json
 import numpy as np
 import xgboost as xgb
@@ -6,11 +7,71 @@ from sklearn.model_selection import train_test_split
 from collections import defaultdict, Counter
 from common import fetch_hk_records, get_zodiac_by_number, ZODIAC_MAP
 
-# 特征提取函数（需要与 predict 一致，此处简化，可参照澳门版）
+# ---------- 特征提取（必须与 strategies_zodiac.py 中的 extract_features_for_zodiac 一致）----------
 def extract_features_for_zodiac(rows, target_zodiac):
-    # 实现与澳门版相同的特征提取逻辑
-    # 为了简洁，此处略，可参考之前的澳门脚本
-    feats = [0]*12
+    from strategies_zodiac import _zodiac_omission_map, _row_numbers, _row_special
+    feats = []
+    # 1. 遗漏
+    omission = _zodiac_omission_map(rows)
+    feats.append(omission.get(target_zodiac, 30))
+    # 2. 近10期出现次数
+    cnt10 = 0
+    for r in rows[:10]:
+        if target_zodiac in [get_zodiac_by_number(n) for n in _row_numbers(r)] or \
+           target_zodiac == get_zodiac_by_number(_row_special(r)):
+            cnt10 += 1
+    feats.append(cnt10)
+    # 3. 近20期出现次数
+    cnt20 = 0
+    for r in rows[:20]:
+        if target_zodiac in [get_zodiac_by_number(n) for n in _row_numbers(r)] or \
+           target_zodiac == get_zodiac_by_number(_row_special(r)):
+            cnt20 += 1
+    feats.append(cnt20)
+    # 4. 最近特别号是否匹配
+    latest_sp_zod = get_zodiac_by_number(_row_special(rows[0]))
+    feats.append(1 if latest_sp_zod == target_zodiac else 0)
+    # 5. 主号频率（近5期）
+    main_cnt = 0
+    for r in rows[:5]:
+        for n in _row_numbers(r):
+            if get_zodiac_by_number(n) == target_zodiac:
+                main_cnt += 1
+    feats.append(main_cnt / 5.0)
+    # 6. 冷热变化率
+    recent = 0
+    for r in rows[:5]:
+        if target_zodiac in [get_zodiac_by_number(n) for n in _row_numbers(r)] or \
+           target_zodiac == get_zodiac_by_number(_row_special(r)):
+            recent += 1
+    old = 0
+    for r in rows[5:10]:
+        if target_zodiac in [get_zodiac_by_number(n) for n in _row_numbers(r)] or \
+           target_zodiac == get_zodiac_by_number(_row_special(r)):
+            old += 1
+    feats.append(recent - old)
+    # 7. 特别号出现次数（近10期）
+    sp_cnt = 0
+    for r in rows[:10]:
+        if get_zodiac_by_number(_row_special(r)) == target_zodiac:
+            sp_cnt += 1
+    feats.append(sp_cnt)
+    # 8. 平均间隔
+    indices = [i for i, r in enumerate(rows) if target_zodiac in [get_zodiac_by_number(n) for n in _row_numbers(r)] or target_zodiac == get_zodiac_by_number(_row_special(r))]
+    if len(indices) >= 2:
+        avg_gap = sum(indices[i] - indices[i-1] for i in range(1, len(indices))) / (len(indices) - 1)
+    else:
+        avg_gap = 30
+    feats.append(avg_gap)
+    # 9. 规则评分
+    from strategies_zodiac import _compute_zodiac_score
+    rule_scores = _compute_zodiac_score(rows, recent_window=15, special_boost=3.2)
+    feats.append(rule_scores.get(target_zodiac, 0.0))
+    # 10. 最近特别号与目标生肖号码的最小距离
+    latest_sp = _row_special(rows[0])
+    nums = ZODIAC_MAP.get(target_zodiac, [])
+    min_dist = min(abs(n - latest_sp) for n in nums) if nums else 25
+    feats.append(min_dist / 50.0)
     return feats
 
 def prepare_dataset(rows, start=30, seq_len=20):
@@ -18,14 +79,14 @@ def prepare_dataset(rows, start=30, seq_len=20):
     for i in range(start, len(rows)):
         hist = rows[i-seq_len:i]
         target = rows[i]
-        target_map = set()
-        target_map.add(get_zodiac_by_number(target["special_number"]))
+        target_zods = set()
+        target_zods.add(get_zodiac_by_number(target["special_number"]))
         for n in target["numbers"]:
-            target_map.add(get_zodiac_by_number(n))
+            target_zods.add(get_zodiac_by_number(n))
         for z in ZODIAC_MAP:
             feats = extract_features_for_zodiac(hist, z)
             X.append(feats)
-            y.append(1 if z in target_map else 0)
+            y.append(1 if z in target_zods else 0)
     return np.array(X), np.array(y)
 
 def main():
