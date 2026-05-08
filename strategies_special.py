@@ -1,4 +1,4 @@
-# strategies_special.py - 特五肖恢复版（3窗口投票，达到过70%）
+# strategies_special.py - 特五肖最佳配置版（3窗口投票，无激进连空保护）
 
 import json
 import math
@@ -97,7 +97,7 @@ def _compute_special_five_score(rows, recent_window=20):
     return scores
 
 def predict_strong_five(rows, params, miss_streak=0):
-    # 使用三个窗口投票（12,20,28）—— 曾达到70%的配置
+    # 使用曾达到70%的窗口：12,20,28
     windows = [12, 20, 28]
     votes = Counter()
     for w in windows:
@@ -106,7 +106,7 @@ def predict_strong_five(rows, params, miss_streak=0):
         picks = [ranked[i][0] for i in range(5)]
         votes.update(picks)
     final_picks = [z for z, _ in votes.most_common(5)]
-    # 轻度连空保护（仅当 miss_streak >= 2 时补冷号）
+    # 轻度连空保护（仅当连空≥2时补冷号，不激进）
     if miss_streak >= 2 and rows:
         omission = _zodiac_omission_map(rows)
         coldest = sorted(omission, key=omission.get, reverse=True)[:2]
