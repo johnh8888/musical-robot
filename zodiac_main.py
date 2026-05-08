@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# zodiac_main.py - 每天自动诊断并选择最优窗口
+# zodiac_main.py - 每日自动诊断并选择最优窗口
 
 import argparse
 import json
@@ -12,7 +12,7 @@ from strategies_zodiac import (
     _zodiac_omission_map
 )
 
-ALL_WINDOWS = list(range(8, 33, 2))   # [8,10,...,32]
+ALL_WINDOWS = list(range(8, 33, 2))   # 候选窗口 8,10,12,...,32
 
 def get_history_rows_as_list(limit=600):
     records = fetch_hk_records(limit=limit)
@@ -27,7 +27,7 @@ def get_history_rows_as_list(limit=600):
     return rows
 
 def diagnose_best_windows(rows, lookback=40, top_k=6):
-    """基于最近 lookback 期数据，评估每个窗口并返回最优的 top_k 个窗口"""
+    """基于最近 lookback 期数据诊断各窗口性能，返回最优 top_k 个窗口"""
     rows_rev = list(reversed(rows))
     total = min(lookback, len(rows_rev) - 20)
     if total <= 0:
@@ -59,7 +59,7 @@ def diagnose_best_windows(rows, lookback=40, top_k=6):
     sorted_windows = sorted(window_stats.items(), key=lambda x: (-x[1]["hit_rate"], x[1]["max_miss"]))
     best_windows = [w for w, _ in sorted_windows[:top_k]]
     best_windows.sort()
-    # 打印诊断结果
+    # 打印诊断结果（便于观察）
     print("=== 自动诊断各窗口性能（二生肖） ===")
     for w, stats in window_stats.items():
         print(f"窗口 {w:2d}: 命中率 {stats['hit_rate']*100:.1f}%，最大连空 {stats['max_miss']}")
@@ -102,6 +102,7 @@ def backtest_zodiac_stats(rows, lookback, windows):
         pred_single = votes_single.most_common(1)[0][0]
         pred_two = [z for z, _ in votes_two.most_common(2)]
         pred_three = [z for z, _ in votes_three.most_common(3)]
+        # 连空保护
         if miss_three >= 2:
             omission = _zodiac_omission_map(train)
             if omission:
@@ -114,6 +115,7 @@ def backtest_zodiac_stats(rows, lookback, windows):
                 coldest = max(omission, key=omission.get)
                 if coldest not in pred_two:
                     pred_two[-1] = coldest
+        # 统计
         if pred_single in win_z:
             hits_single += 1
             miss_single = 0
@@ -155,7 +157,6 @@ def main():
     if args.show:
         # 每天自动诊断并选择最优窗口
         best_windows = diagnose_best_windows(rows, lookback=40, top_k=6)
-        print(f"本次预测使用窗口: {best_windows}")
         votes_single = Counter()
         votes_two = Counter()
         votes_three = Counter()
