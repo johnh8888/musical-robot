@@ -1,4 +1,4 @@
-# strategies_special.py - 特五肖策略（连空保护阈值改为1）
+# strategies_special.py - 特五肖（单窗口12，连空保护阈值1）
 
 import json
 import math
@@ -78,7 +78,7 @@ def get_special_number_recommendation(rows, top_n=3, main_pool=None, recent_wind
     defenses = [n for n, _ in sorted_nums[1:4]]
     return primary, defenses[:top_n-1]
 
-def _compute_special_five_score(rows, recent_window=20):
+def _compute_special_five_score(rows, recent_window=12):
     scores = {z: 0.0 for z in ZODIAC_MAP}
     specials = [_row_special(r) for r in rows]
     seq = [get_zodiac_by_number(sp) for sp in specials]
@@ -94,40 +94,20 @@ def _compute_special_five_score(rows, recent_window=20):
             omission[z] = i + 1
     for z, omit in omission.items():
         scores[z] += math.log(omit + 1) * 2.0
-    # 主号互补
-    main_z = Counter()
-    for row in rows[:15]:
-        for n in _row_numbers(row):
-            main_z[get_zodiac_by_number(n)] += 1
-    total_main = sum(main_z.values()) or 1
-    avg_freq = 1.0 / len(ZODIAC_MAP)
-    for z in ZODIAC_MAP:
-        freq = main_z.get(z, 0) / total_main
-        if freq < avg_freq * 0.6:
-            scores[z] += 5.0
     return scores
 
 def predict_strong_five(rows, params, miss_streak=0):
-    # 硬编码最优窗口
-    windows = [12, 16, 20, 32]
-    votes = Counter()
-    for w in windows:
-        scores = _compute_special_five_score(rows, w)
-        ranked = sorted(scores.items(), key=lambda x: -x[1])
-        picks = [ranked[i][0] for i in range(5)]
-        votes.update(picks)
-    final_picks = [z for z, _ in votes.most_common(5)]
-    # 强连空保护：连空 ≥1 时，强制加入遗漏最长的2个生肖
+    # 固定使用窗口12（命中率最高）
+    scores = _compute_special_five_score(rows, 12)
+    ranked = sorted(scores.items(), key=lambda x: -x[1])
+    picks = [ranked[i][0] for i in range(5)]
+    # 连空保护：连空 ≥1 时强制加入遗漏最长的生肖
     if miss_streak >= 1 and rows:
         omission = _zodiac_omission_map(rows)
+        # 取遗漏最长的2个生肖，尝试替换最后一个
         coldest = sorted(omission, key=omission.get, reverse=True)[:2]
         for z in coldest:
-            if z not in final_picks:
-                final_picks[-1] = z
+            if z not in picks:
+                picks[-1] = z
                 break
-    # 连空 ≥1 时，同时加入最近一期特别号生肖
-    if miss_streak >= 1 and rows:
-        latest_z = get_zodiac_by_number(_row_special(rows[0]))
-        if latest_z not in final_picks:
-            final_picks[-1] = latest_z
-    return final_picks[:5]
+    return picks[:5]
