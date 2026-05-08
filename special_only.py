@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-# special_only.py - 特五肖预测（使用多窗口投票）
+# special_only.py - 特五肖预测
 
 import argparse
 import json
-from collections import Counter
 from common import fetch_hk_records, get_zodiac_by_number, next_issue
 from strategies_special import predict_strong_five, get_special_number_recommendation
 
