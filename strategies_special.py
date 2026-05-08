@@ -1,4 +1,4 @@
-# strategies_special.py - 特五肖策略（5窗口投票 + 强连空保护）
+# strategies_special.py - 特五肖策略（6窗口等权投票 + 强连空保护）
 
 import json
 import math
@@ -60,19 +60,19 @@ def get_special_number_recommendation(rows, top_n=3, main_pool=None, recent_wind
     for n in ALL_NUMBERS:
         omit = omission.get(n, 30)
         score = math.log(omit + 1) * 2.0
-        # 邻号遗漏（±1,±2,±3）权重提高
+        # 邻号遗漏（±1,±2,±3）
         neighbors = {n-1, n-2, n-3, n+1, n+2, n+3} & set(ALL_NUMBERS)
         if neighbors:
             min_omit = min(omission.get(m, 30) for m in neighbors)
             neighbor_score = 1.0 - (min_omit - 1) * 0.03
             neighbor_score = max(0.0, min(1.0, neighbor_score))
-            score += neighbor_score * 3.0   # 从2.5提高到3.0
+            score += neighbor_score * 2.5
         if n in recent_3_set:
-            score *= 0.65   # 从0.6调整为0.65，稍微放宽惩罚
+            score *= 0.6
         if main_set and n in main_set:
             score *= 0.7
         if n % 10 == coldest_tail:
-            score += 4.0    # 从3.0提高到4.0
+            score += 3.0
         scores[n] = max(0.0, score)
     sorted_nums = sorted(scores.items(), key=lambda x: -x[1])
     primary = sorted_nums[0][0]
@@ -87,15 +87,15 @@ def _compute_special_five_score(rows, recent_window=20):
     if n == 0:
         return {z: 1.0 for z in ZODIAC_MAP}
     for i, z in enumerate(seq[:recent_window]):
-        w = math.exp(-i / 12.0)   # 衰减加快
-        scores[z] += 6.0 * w
+        w = math.exp(-i / 15.0)
+        scores[z] += 5.0 * w
     omission = {z: 0 for z in ZODIAC_MAP}
     for i, z in enumerate(seq):
         if omission[z] == 0:
             omission[z] = i + 1
     for z, omit in omission.items():
-        scores[z] += math.log(omit + 1) * 2.5   # 遗漏权重提高
-    # 主号互补（低频生肖加分）
+        scores[z] += math.log(omit + 1) * 2.0
+    # 主号互补（保留）
     main_z = Counter()
     for row in rows[:15]:
         for n in _row_numbers(row):
@@ -104,18 +104,18 @@ def _compute_special_five_score(rows, recent_window=20):
     avg_freq = 1.0 / len(ZODIAC_MAP)
     for z in ZODIAC_MAP:
         freq = main_z.get(z, 0) / total_main
-        if freq < avg_freq * 0.5:     # 更低的阈值
-            scores[z] += 7.0
+        if freq < avg_freq * 0.6:
+            scores[z] += 5.0
     return scores
 
 def predict_strong_five(rows, params, miss_streak=0):
-    # 5个窗口投票
-    windows = [12, 16, 20, 24, 28]
+    # 6个窗口等权投票（覆盖 12~32，步长4）
+    windows = [12, 16, 20, 24, 28, 32]
     votes = Counter()
     for w in windows:
         scores = _compute_special_five_score(rows, w)
         ranked = sorted(scores.items(), key=lambda x: -x[1])
-        picks = [ranked[i][0] for i in range(5)]
+        picks = [ranked[i][0] for i in range(5)]   # 每个窗口取前5个生肖
         votes.update(picks)
     final_picks = [z for z, _ in votes.most_common(5)]
     # 强连空保护：连空≥2时，强制加入遗漏最长的2个生肖
@@ -126,7 +126,7 @@ def predict_strong_five(rows, params, miss_streak=0):
             if z not in final_picks:
                 final_picks[-1] = z
                 break   # 只替换最后一个
-    # 连空1时，加入最近一期特别号生肖
+    # 连空1时，加入最近一期特别号生肖（确保不重复）
     if miss_streak >= 1 and rows:
         latest_z = get_zodiac_by_number(_row_special(rows[0]))
         if latest_z not in final_picks:
