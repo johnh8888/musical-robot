@@ -15,14 +15,17 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           persist-credentials: true
+
       - uses: actions/setup-python@v5
         with:
           python-version: '3.10'
+
       - name: 安装依赖
         run: |
           pip install --upgrade pip
           pip install -r requirements.txt
           pip install xgboost scikit-learn
+
       - name: 训练 XGBoost 模型（若不存在）
         run: |
           if [ ! -f "xgboost_zodiac.json" ]; then
@@ -37,14 +40,36 @@ jobs:
           fi
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # 诊断一二生肖窗口性能并保存最优窗口
+      - name: 诊断一二生肖窗口
+        run: |
+          python zodiac_main.py --diagnose
+          git add best_windows.json
+          git commit -m "Auto-update best windows" || echo "No changes"
+          git push || echo "Push failed"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # 诊断特五肖窗口性能并保存最优窗口
+      - name: 诊断特五肖窗口
+        run: |
+          python special_only.py --diagnose
+          git add best_special_windows.json
+          git commit -m "Auto-update best special windows" || echo "No changes"
+          git push || echo "Push failed"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: 一二三生肖预测
         run: python zodiac_main.py --show
+
       - name: 特别号预测
         run: python special_only.py --show
+
       - name: 上传预测结果
         uses: actions/upload-artifact@v4
         with:
           name: prediction-logs
           path: |
-            zodiac_result.txt
-            special_result.txt
+            *.txt
