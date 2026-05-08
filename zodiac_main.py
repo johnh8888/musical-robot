@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# zodiac_main.py - 使用最优窗口（自动读取或默认）
+# zodiac_main.py - 全自动版（自动诊断并缓存最优窗口）
 
 import argparse
 import json
@@ -12,8 +12,8 @@ from strategies_zodiac import (
     _zodiac_omission_map
 )
 
-# 根据诊断结果手动设置的最优窗口（作为备选）
-DEFAULT_WINDOWS = [8, 10, 12, 18, 20, 30]
+ALL_WINDOWS = list(range(8, 33, 2))  # [8,10,...,32]
+DEFAULT_WINDOWS = [8, 10, 12, 18, 20, 30]   # 备选
 
 def get_history_rows_as_list(limit=600):
     records = fetch_hk_records(limit=limit)
@@ -27,15 +27,56 @@ def get_history_rows_as_list(limit=600):
         })
     return rows
 
-def load_best_windows():
+def diagnose_windows(rows, lookback=40):
+    """诊断各窗口性能，返回按命中率排序的最优窗口列表"""
+    rows_rev = list(reversed(rows))
+    total = min(lookback, len(rows_rev) - 20)
+    if total <= 0:
+        return DEFAULT_WINDOWS
+    window_stats = {}
+    for w in ALL_WINDOWS:
+        hits = 0
+        miss_streak = 0
+        max_miss = 0
+        for i in range(total):
+            train = rows_rev[i+20:]
+            if len(train) < 20:
+                continue
+            actual = rows_rev[i]
+            win_main = json.loads(actual["numbers_json"])
+            win_sp = actual["special_number"]
+            win_z = {get_zodiac_by_number(n) for n in win_main}
+            win_z.add(get_zodiac_by_number(win_sp))
+            picks = predict_strong_two(train, {"two_recent_window": w, "two_special_boost": 3.0}, xgb_weight=0.6)
+            hit = any(z in win_z for z in picks)
+            if hit:
+                hits += 1
+                miss_streak = 0
+            else:
+                miss_streak += 1
+                max_miss = max(max_miss, miss_streak)
+        hit_rate = hits / total if total > 0 else 0
+        window_stats[w] = {"hit_rate": hit_rate, "max_miss": max_miss}
+    # 按命中率排序，取前6个
+    sorted_windows = sorted(window_stats.items(), key=lambda x: (-x[1]["hit_rate"], x[1]["max_miss"]))
+    best_windows = [w for w, _ in sorted_windows[:6]]
+    best_windows.sort()
+    return best_windows
+
+def load_or_diagnose_windows(rows):
+    best_windows_file = "best_windows.json"
     try:
-        with open("best_windows.json", "r") as f:
+        with open(best_windows_file, "r") as f:
             windows = json.load(f)
             print(f"已加载最优窗口: {windows}")
             return windows
-    except:
-        print(f"未找到 best_windows.json，使用默认窗口: {DEFAULT_WINDOWS}")
-        return DEFAULT_WINDOWS
+    except FileNotFoundError:
+        print("未找到窗口缓存文件，正在自动诊断...")
+        windows = diagnose_windows(rows)
+        with open(best_windows_file, "w") as f:
+            json.dump(windows, f)
+        print(f"已诊断并保存最优窗口: {windows}")
+        return windows
 
 def backtest_zodiac_stats(rows, lookback, windows):
     rows_rev = list(reversed(rows))
@@ -73,7 +114,6 @@ def backtest_zodiac_stats(rows, lookback, windows):
         pred_single = votes_single.most_common(1)[0][0]
         pred_two = [z for z, _ in votes_two.most_common(2)]
         pred_three = [z for z, _ in votes_three.most_common(3)]
-        # 连空保护
         if miss_three >= 2:
             omission = _zodiac_omission_map(train)
             if omission:
@@ -86,7 +126,7 @@ def backtest_zodiac_stats(rows, lookback, windows):
                 coldest = max(omission, key=omission.get)
                 if coldest not in pred_two:
                     pred_two[-1] = coldest
-        # 命中统计
+        # 统计
         if pred_single in win_z:
             hits_single += 1
             miss_single = 0
@@ -115,14 +155,9 @@ def backtest_zodiac_stats(rows, lookback, windows):
         "three_max_miss": max_miss_three
     }
 
-def diagnose_windows(rows, lookback=40):
-    # 此函数用于生成诊断，实际使用中可忽略或注释
-    pass
-
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--show", action="store_true")
-    parser.add_argument("--diagnose", action="store_true")
     args = parser.parse_args()
 
     rows = get_history_rows_as_list(limit=600)
@@ -130,13 +165,8 @@ def main():
         print("数据获取失败")
         return
 
-    if args.diagnose:
-        # 诊断逻辑（略，可使用已有的 diagnose_windows 函数）
-        print("诊断模式已弃用，请直接使用 --show 读取已保存的最优窗口")
-        return
-
     if args.show:
-        windows = load_best_windows()
+        windows = load_or_diagnose_windows(rows)
         votes_single = Counter()
         votes_two = Counter()
         votes_three = Counter()
