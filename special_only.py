@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# special_only.py - 升级版（5窗口投票 + 连空保护回测）
+# special_only.py - 升级版（5窗口投票 + 连空保护）
 
 import argparse
 import json
@@ -33,7 +33,6 @@ def backtest_special_zodiac(rows, lookback):
             continue
         actual = rows_rev[i]
         actual_zod = get_zodiac_by_number(actual["special_number"])
-        # 回测时传入 miss_streak（模拟连空保护）
         picks = predict_strong_five(train, {"four_recent_special_window": 20}, miss_streak)
         if actual_zod in picks:
             hits += 1
@@ -54,7 +53,7 @@ def main():
         return
 
     if args.show:
-        # 使用当前连空为0（实际预测时可从数据库读取，这里简化）
+        # 实际预测时 miss_streak 应为最近连空次数，这里简化为0（可扩展）
         miss_streak = 0
         picks = predict_strong_five(rows, {"four_recent_special_window": 20}, miss_streak)
         sp, defenses = get_special_number_recommendation(rows, top_n=3, recent_window=30)
