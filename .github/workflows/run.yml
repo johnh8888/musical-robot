@@ -26,15 +26,12 @@ jobs:
           pip install -r requirements.txt
           pip install xgboost scikit-learn
 
-      - name: 配置 Git 身份
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-
       - name: 训练 XGBoost 模型（若不存在）
         run: |
           if [ ! -f "xgboost_zodiac.json" ]; then
             python train_xgboost.py
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
             git add xgboost_zodiac.json
             git commit -m "Auto-generate XGBoost model" || echo "No changes"
             git push || echo "Push failed"
@@ -44,7 +41,6 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # 注意：不再运行诊断，直接使用已提交的最优窗口文件
       - name: 一二三生肖预测
         run: python zodiac_main.py --show
 
