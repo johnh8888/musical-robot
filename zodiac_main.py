@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# zodiac_main.py - 最终稳定版（三生肖预期70%）
+# zodiac_main.py - 最佳配置版（窗口 [8,10,12,18,20,30]，XGB权重0）
 
 import argparse
 import json
@@ -12,10 +12,11 @@ from strategies_zodiac import (
     _zodiac_omission_map
 )
 
+# 最佳配置参数（曾达到一生肖50%、二生肖70%、三生肖70%）
 OPTIMAL_WINDOWS = [8, 10, 12, 18, 20, 30]
-XGB_WEIGHT = 0.6
+XGB_WEIGHT = 0.0   # 禁用 XGBoost
 
-def get_history_rows_as_list(limit=1200):
+def get_history_rows_as_list(limit=600):
     records = fetch_hk_records(limit=limit)
     rows = []
     for r in records:
@@ -64,6 +65,7 @@ def backtest_zodiac_stats(rows, lookback):
         pred_single = votes_single.most_common(1)[0][0]
         pred_two = [z for z, _ in votes_two.most_common(2)]
         pred_three = [z for z, _ in votes_three.most_common(3)]
+        # 连空保护（三生肖）
         if miss_three >= 2:
             omission = _zodiac_omission_map(train)
             if omission:
@@ -76,6 +78,7 @@ def backtest_zodiac_stats(rows, lookback):
                 coldest = max(omission, key=omission.get)
                 if coldest not in pred_two:
                     pred_two[-1] = coldest
+        # 统计
         if pred_single in win_z:
             hits_single += 1
             miss_single = 0
@@ -109,14 +112,14 @@ def main():
     parser.add_argument("--show", action="store_true")
     args = parser.parse_args()
 
-    rows = get_history_rows_as_list(limit=1200)
+    rows = get_history_rows_as_list(limit=600)
     if not rows:
         print("数据获取失败")
         return
 
     if args.show:
         windows = OPTIMAL_WINDOWS
-        print(f"使用窗口: {windows}, XGB权重: {XGB_WEIGHT}")
+        print(f"使用配置: 窗口 {windows}, XGB权重 {XGB_WEIGHT}")
         votes_single = Counter()
         votes_two = Counter()
         votes_three = Counter()
