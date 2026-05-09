@@ -14,40 +14,31 @@ jobs:
       - uses: actions/checkout@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          persist-credentials: true
-
       - uses: actions/setup-python@v5
         with:
           python-version: '3.10'
-
       - name: 安装依赖
         run: |
           pip install --upgrade pip
           pip install -r requirements.txt
           pip install xgboost scikit-learn
-
-      - name: 训练 XGBoost 模型（若不存在）
+      - name: 训练特别号模型（若不存在）
         run: |
-          if [ ! -f "xgboost_zodiac.json" ]; then
-            python train_xgboost.py
+          if [ ! -f "special_model.pkl" ]; then
+            python special_only.py --train
             git config user.name "github-actions[bot]"
             git config user.email "github-actions[bot]@users.noreply.github.com"
-            git add xgboost_zodiac.json
-            git commit -m "Auto-generate XGBoost model" || echo "No changes"
+            git add special_model.pkl
+            git commit -m "Auto-train special number model" || echo "No changes"
             git push || echo "Push failed"
           else
-            echo "XGBoost 模型已存在"
+            echo "模型已存在"
           fi
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
       - name: 一二三生肖预测
         run: python zodiac_main.py --show
-
       - name: 特别号预测
         run: python special_only.py --show
-
-      - name: 上传预测结果
+      - name: 上传结果
         uses: actions/upload-artifact@v4
         with:
           name: prediction-logs
