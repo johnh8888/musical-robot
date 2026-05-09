@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# zodiac_main.py - 一二三生肖最终版（修正变量未定义错误）
+# zodiac_main.py - 一二三生肖最终版（已修复变量未定义错误）
 
 import argparse
 import json
@@ -10,7 +10,7 @@ from strategies_zodiac import (
     _zodiac_omission_map
 )
 
-OPTIMAL_WINDOWS = [8,10,12,18,20,30]
+OPTIMAL_WINDOWS = [8, 10, 12, 18, 20, 30]
 XGB_WEIGHT = 0.0
 
 def get_history_rows_as_list(limit=1000):
@@ -27,8 +27,8 @@ def get_history_rows_as_list(limit=1000):
 
 def backtest_zodiac_stats(rows, lookback):
     rows_rev = list(reversed(rows))
-    total = min(lookback, len(rows_rev)-20)
-    if total<=0:
+    total = min(lookback, len(rows_rev) - 20)
+    if total <= 0:
         return None
     hits_single = 0
     hits_two = 0
@@ -39,54 +39,62 @@ def backtest_zodiac_stats(rows, lookback):
     max_miss_two = 0
     miss_three = 0
     max_miss_three = 0
+
     for i in range(total):
         train = rows_rev[i+20:]
-        if len(train)<20:
+        if len(train) < 20:
             continue
         actual = rows_rev[i]
         win_main = json.loads(actual["numbers_json"])
         win_sp = actual["special_number"]
         win_z = {get_zodiac_by_number(n) for n in win_main}
         win_z.add(get_zodiac_by_number(win_sp))
-        votes_s = Counter()
-        votes_t = Counter()
-        votes_th = Counter()
+
+        votes_single = Counter()
+        votes_two = Counter()
+        votes_three = Counter()
         for w in OPTIMAL_WINDOWS:
-            votes_s[predict_strong_single(train, {"single_recent_window":w,"single_special_boost":3.2}, xgb_weight=XGB_WEIGHT)] += 1
-            for p in predict_strong_two(train, {"two_recent_window":w,"two_special_boost":3.0}, xgb_weight=XGB_WEIGHT):
-                votes_t[p] += 1
+            votes_single[predict_strong_single(train, {"single_recent_window": w, "single_special_boost": 3.2}, xgb_weight=XGB_WEIGHT)] += 1
+            for p in predict_strong_two(train, {"two_recent_window": w, "two_special_boost": 3.0}, xgb_weight=XGB_WEIGHT):
+                votes_two[p] += 1
             for p in predict_strong_three_with_window(train, w, xgb_weight=XGB_WEIGHT):
-                votes_th[p] += 1
-        pred_single = votes_s.most_common(1)[0][0]
-        pred_two = [z for z,_ in votes_t.most_common(2)]
-        pred_three = [z for z,_ in votes_th.most_common(3)]
-        # 连空保护
+                votes_three[p] += 1
+
+        pred_single = votes_single.most_common(1)[0][0]
+        pred_two = [z for z, _ in votes_two.most_common(2)]
+        pred_three = [z for z, _ in votes_three.most_common(3)]
+
+        # 三生肖连空保护
         if miss_three >= 2:
             omission = _zodiac_omission_map(train)
             if omission:
                 coldest_two = sorted(omission, key=omission.get, reverse=True)[:2]
                 pred_three = [pred_three[0]] + [c for c in coldest_two if c != pred_three[0]]
+        # 二生肖连空保护
         if miss_two >= 2:
             omission = _zodiac_omission_map(train)
             if omission:
                 coldest = max(omission, key=omission.get)
                 if coldest not in pred_two:
                     pred_two[-1] = coldest
-        # 一生肖
+
+        # 一生肖统计
         if pred_single in win_z:
             hits_single += 1
             miss_single = 0
         else:
             miss_single += 1
             max_miss_single = max(max_miss_single, miss_single)
-        # 二生肖
+
+        # 二生肖统计
         if any(z in win_z for z in pred_two):
             hits_two += 1
             miss_two = 0
         else:
             miss_two += 1
             max_miss_two = max(max_miss_two, miss_two)
-        # 三生肖
+
+        # 三生肖统计
         hit_cnt = sum(1 for z in pred_three if z in win_z)
         if hit_cnt >= 2:
             hits_three += 1
@@ -94,12 +102,13 @@ def backtest_zodiac_stats(rows, lookback):
         else:
             miss_three += 1
             max_miss_three = max(max_miss_three, miss_three)
+
     return {
-        "single_hit_rate": hits_single/total,
+        "single_hit_rate": hits_single / total,
         "single_max_miss": max_miss_single,
-        "two_hit_rate": hits_two/total,
+        "two_hit_rate": hits_two / total,
         "two_max_miss": max_miss_two,
-        "three_hit_rate": hits_three/total,
+        "three_hit_rate": hits_three / total,
         "three_max_miss": max_miss_three
     }
 
@@ -113,18 +122,18 @@ def main():
         return
     if args.show:
         print(f"使用窗口 {OPTIMAL_WINDOWS}, XGB权重 {XGB_WEIGHT}")
-        votes_s = Counter()
-        votes_t = Counter()
-        votes_th = Counter()
+        votes_single = Counter()
+        votes_two = Counter()
+        votes_three = Counter()
         for w in OPTIMAL_WINDOWS:
-            votes_s[predict_strong_single(rows, {"single_recent_window":w,"single_special_boost":3.2}, xgb_weight=XGB_WEIGHT)] += 1
-            for p in predict_strong_two(rows, {"two_recent_window":w,"two_special_boost":3.0}, xgb_weight=XGB_WEIGHT):
-                votes_t[p] += 1
+            votes_single[predict_strong_single(rows, {"single_recent_window": w, "single_special_boost": 3.2}, xgb_weight=XGB_WEIGHT)] += 1
+            for p in predict_strong_two(rows, {"two_recent_window": w, "two_special_boost": 3.0}, xgb_weight=XGB_WEIGHT):
+                votes_two[p] += 1
             for p in predict_strong_three_with_window(rows, w, xgb_weight=XGB_WEIGHT):
-                votes_th[p] += 1
-        single = votes_s.most_common(1)[0][0]
-        two = [z for z,_ in votes_t.most_common(2)]
-        three = [z for z,_ in votes_th.most_common(3)]
+                votes_three[p] += 1
+        single = votes_single.most_common(1)[0][0]
+        two = [z for z, _ in votes_two.most_common(2)]
+        three = [z for z, _ in votes_three.most_common(3)]
         latest = rows[0]["issue_no"]
         print(f"预测期号: {next_issue(latest)}")
         print(f"一生肖: {single}")
