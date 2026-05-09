@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# special_only.py - 特别号数字预测 + 特五肖回测统计
+# special_only.py - 特别号数字预测 + 特五肖回测统计（修复版）
 
 import argparse
 import json
@@ -8,7 +8,7 @@ from collections import Counter
 from datetime import datetime
 import xgboost as xgb
 import numpy as np
-from common import fetch_hk_records_merged, get_zodiac_by_number, next_issue, ALL_NUMBERS
+from common import fetch_hk_records_merged, get_zodiac_by_number, next_issue, ALL_NUMBERS, ZODIAC_MAP
 from strategies_special import get_special_number_recommendation, compute_special_five_score
 
 # ---------- 特征工程 ----------
@@ -89,7 +89,7 @@ def get_confidence_label(prob):
     else:
         return "低置信度"
 
-# ---------- 特五肖投票预测（保留） ----------
+# ---------- 特五肖投票预测（使用 ZODIAC_MAP） ----------
 def predict_strong_five(rows, params, miss_streak=0):
     windows = [12, 20, 28]
     votes = Counter()
@@ -100,20 +100,20 @@ def predict_strong_five(rows, params, miss_streak=0):
             votes[z] += 1
     final = [z for z, _ in votes.most_common(5)]
     if miss_streak >= 2:
-        omission = {}
-        for z in ZODIAC_MAP:
-            omission[z] = len(rows)+1
-        for i,row in enumerate(rows):
-            for n in json.loads(row["numbers_json"]):
+        # 计算遗漏最长的生肖
+        omission = {z: len(rows) + 1 for z in ZODIAC_MAP}
+        for i, row in enumerate(rows):
+            nums = json.loads(row["numbers_json"])
+            sp = row["special_number"]
+            for n in nums:
                 omission[get_zodiac_by_number(n)] = 0
-            omission[get_zodiac_by_number(row["special_number"])] = 0
+            omission[get_zodiac_by_number(sp)] = 0
         coldest = max(omission, key=omission.get)
         if coldest not in final:
             final[-1] = coldest
     return final[:5]
 
 def backtest_special_zodiac(rows, lookback):
-    """计算特五肖近 lookback 期的命中率和最大连空"""
     rows_rev = list(reversed(rows))
     total = min(lookback, len(rows_rev) - 20)
     if total <= 0:
@@ -163,7 +163,7 @@ def main():
         return
 
     if args.analyze:
-        # 调用分布分析函数（略，可复用之前版本）
+        # 分布分析（可后续实现）
         print("分析功能暂略")
         return
 
@@ -176,7 +176,7 @@ def main():
         if model is None:
             print("请先运行 --train 训练模型")
             return
-        # 诊断函数略
+        # 诊断功能暂略
         print("诊断功能暂略")
         return
 
