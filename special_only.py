@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-# special_only.py - 特别号数字预测 + 特五肖回测统计（修复版）
+# special_only.py - 特别号数字预测 + 特五肖回测统计（自动修复旧模型版）
 
 import argparse
 import json
 import pickle
+import os
 from collections import Counter
 from datetime import datetime
 import xgboost as xgb
@@ -11,13 +12,8 @@ import numpy as np
 from common import fetch_hk_records_merged, get_zodiac_by_number, next_issue, ZODIAC_MAP
 from strategies_special import get_special_number_recommendation, compute_special_five_score
 
-# ---------- 特征工程（用于 XGBoost 特别号数字模型） ----------
+# ---------- 特征工程 ----------
 def extract_features_for_special(rows, target_num):
-    """
-    rows: 历史记录列表（降序，最新在前）
-    target_num: 1-49 的号码
-    返回 8 维特征
-    """
     specials = [r["special_number"] for r in rows]
     # 1. 遗漏
     omission = 0
@@ -36,14 +32,14 @@ def extract_features_for_special(rows, target_num):
     diff_feat = min(diff, 9) / 9.0
     # 5. 尾数
     tail = target_num % 10
-    # 6. 星期（从最新一期日期）
+    # 6. 星期
     wd = -1
     if rows and "draw_date" in rows[0]:
         try:
             wd = datetime.strptime(rows[0]["draw_date"], "%Y-%m-%d").weekday()
         except:
             pass
-    # 7. 冷热变化率（近5期 vs 前5期）
+    # 7. 冷热变化率
     recent = sum(1 for sp in specials[:5] if sp == target_num)
     old = sum(1 for sp in specials[5:10] if sp == target_num)
     change = recent - old
@@ -52,10 +48,9 @@ def extract_features_for_special(rows, target_num):
     return [omission, cnt10, cnt20, diff_feat, tail, wd, change, same_tail]
 
 def train_special_model(rows, model_path="special_model.pkl"):
-    """训练 XGBoost 特别号数字模型"""
     X, y = [], []
     for i in range(30, len(rows)):
-        hist = rows[i-20:i]          # 使用前20期作为历史窗口
+        hist = rows[i-20:i]
         target = rows[i]["special_number"]
         for n in range(1, 50):
             X.append(extract_features_for_special(hist, n))
@@ -71,20 +66,31 @@ def train_special_model(rows, model_path="special_model.pkl"):
         random_state=42
     )
     model.fit(np.array(X), np.array(y))
+    # 删除旧模型文件（如果存在）
+    if os.path.exists(model_path):
+        os.remove(model_path)
     with open(model_path, "wb") as f:
         pickle.dump(model, f)
     print(f"✅ 特别号模型已保存至 {model_path}，训练样本数: {len(X)}")
     return model
 
 def load_special_model(model_path="special_model.pkl"):
+    if not os.path.exists(model_path):
+        return None
     try:
         with open(model_path, "rb") as f:
-            return pickle.load(f)
-    except:
+            obj = pickle.load(f)
+        # 检查是否为 XGBoost 模型
+        if hasattr(obj, 'predict_proba'):
+            return obj
+        else:
+            print(f"⚠️ 旧模型格式错误（{type(obj).__name__}），将重新训练")
+            return None
+    except Exception as e:
+        print(f"⚠️ 加载模型失败: {e}")
         return None
 
 def predict_special_number(rows, model, top_k=5):
-    """返回主推号码、概率、防守列表"""
     probs = []
     for n in range(1, 50):
         feats = extract_features_for_special(rows, n)
@@ -104,11 +110,8 @@ def get_confidence_label(prob):
     else:
         return "低置信度"
 
-# ---------- 特五肖投票预测（使用规则策略） ----------
+# ---------- 特五肖投票预测 ----------
 def predict_strong_five(rows, params, miss_streak=0):
-    """
-    通过多个窗口投票 + 连空保护，返回5个生肖
-    """
     windows = [12, 20, 28]
     votes = Counter()
     for w in windows:
@@ -118,7 +121,6 @@ def predict_strong_five(rows, params, miss_streak=0):
             votes[z] += 1
     final = [z for z, _ in votes.most_common(5)]
 
-    # 连空保护：如果已经连续2期未中，引入当前最冷的生肖替换最后一个
     if miss_streak >= 2:
         omission = {z: 0 for z in ZODIAC_MAP}
         for i, row in enumerate(rows):
@@ -127,14 +129,12 @@ def predict_strong_five(rows, params, miss_streak=0):
             for n in nums:
                 omission[get_zodiac_by_number(n)] = i + 1
             omission[get_zodiac_by_number(sp)] = i + 1
-        # 遗漏值越小表示越近期出现，我们要找遗漏最大的（最冷）
         coldest = max(omission, key=omission.get)
         if coldest not in final:
             final[-1] = coldest
     return final[:5]
 
 def backtest_special_zodiac(rows, lookback):
-    """回测特五肖命中率和最大连空"""
     rows_rev = list(reversed(rows))
     total = min(lookback, len(rows_rev) - 20)
     if total <= 0:
@@ -172,11 +172,10 @@ def get_history_rows_as_list(limit=None):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--show", action="store_true", help="显示预测结果")
-    parser.add_argument("--train", action="store_true", help="重新训练 XGBoost 模型")
+    parser.add_argument("--show", action="store_true")
+    parser.add_argument("--train", action="store_true")
     args = parser.parse_args()
 
-    # 获取数据（使用本地 CSV，不设 limit 以获取全部历史）
     rows = get_history_rows_as_list(limit=None)
     if not rows:
         print("❌ 数据获取失败，请确保 Mark_Six.csv 存在")
@@ -186,21 +185,21 @@ def main():
         train_special_model(rows)
         return
 
-    # 加载或训练模型
+    # 加载模型，如果无效则重新训练
     model = load_special_model()
     if model is None:
-        print("⚠️ 模型不存在，正在自动训练...")
+        print("🔄 正在重新训练特别号 XGBoost 模型...")
         model = train_special_model(rows)
 
     if args.show:
-        # 1. 特别号数字预测
+        # 特别号数字
         main_num, prob, defenses = predict_special_number(rows, model, top_k=5)
         conf_label = get_confidence_label(prob)
 
-        # 2. 特五肖预测（基于规则）
+        # 特五肖
         zodiacs = predict_strong_five(rows, {}, miss_streak=0)
 
-        # 3. 规则对照（从 strategies_special 获取）
+        # 规则对照
         try:
             sp_rule, def_rule = get_special_number_recommendation(rows, top_n=3, recent_window=30)
         except:
@@ -217,11 +216,9 @@ def main():
 
         print(f"\n【特五肖推荐】: {'、'.join(zodiacs)}")
 
-        # 特五肖回测（近10期）
         stats10 = backtest_special_zodiac(rows, 10)
         if stats10:
             print(f"\n近10期回测：特五肖命中率 {stats10['hit_rate']:.1%}，最大连空 {stats10['max_miss']}")
-        # 可选：近100期回测
         stats100 = backtest_special_zodiac(rows, 100)
         if stats100:
             print(f"近100期回测：特五肖命中率 {stats100['hit_rate']:.1%}，最大连空 {stats100['max_miss']}")
