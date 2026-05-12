@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# special_only.py - 特别号数字预测 + 特五肖回测统计（自动修复旧模型版）
+# special_only.py - 特别号数字预测 + 特五肖回测统计（最终稳定版）
 
 import argparse
 import json
@@ -15,35 +15,28 @@ from strategies_special import get_special_number_recommendation, compute_specia
 # ---------- 特征工程 ----------
 def extract_features_for_special(rows, target_num):
     specials = [r["special_number"] for r in rows]
-    # 1. 遗漏
+    # 遗漏
     omission = 0
     for sp in specials[::-1]:
         if sp != target_num:
             omission += 1
         else:
             break
-    # 2. 近10期出现次数
     cnt10 = sum(1 for sp in specials[:10] if sp == target_num)
-    # 3. 近20期出现次数
     cnt20 = sum(1 for sp in specials[:20] if sp == target_num)
-    # 4. 与上期差值归一化
     latest_sp = specials[0] if specials else 0
     diff = abs(target_num - latest_sp) if latest_sp else 99
     diff_feat = min(diff, 9) / 9.0
-    # 5. 尾数
     tail = target_num % 10
-    # 6. 星期
     wd = -1
     if rows and "draw_date" in rows[0]:
         try:
             wd = datetime.strptime(rows[0]["draw_date"], "%Y-%m-%d").weekday()
         except:
             pass
-    # 7. 冷热变化率
     recent = sum(1 for sp in specials[:5] if sp == target_num)
     old = sum(1 for sp in specials[5:10] if sp == target_num)
     change = recent - old
-    # 8. 是否与最近特别号同尾
     same_tail = 1 if (latest_sp % 10) == (target_num % 10) else 0
     return [omission, cnt10, cnt20, diff_feat, tail, wd, change, same_tail]
 
@@ -66,7 +59,6 @@ def train_special_model(rows, model_path="special_model.pkl"):
         random_state=42
     )
     model.fit(np.array(X), np.array(y))
-    # 删除旧模型文件（如果存在）
     if os.path.exists(model_path):
         os.remove(model_path)
     with open(model_path, "wb") as f:
@@ -80,7 +72,6 @@ def load_special_model(model_path="special_model.pkl"):
     try:
         with open(model_path, "rb") as f:
             obj = pickle.load(f)
-        # 检查是否为 XGBoost 模型
         if hasattr(obj, 'predict_proba'):
             return obj
         else:
@@ -120,7 +111,6 @@ def predict_strong_five(rows, params, miss_streak=0):
         for z in [ranked[i][0] for i in range(5)]:
             votes[z] += 1
     final = [z for z, _ in votes.most_common(5)]
-
     if miss_streak >= 2:
         omission = {z: 0 for z in ZODIAC_MAP}
         for i, row in enumerate(rows):
@@ -185,21 +175,15 @@ def main():
         train_special_model(rows)
         return
 
-    # 加载模型，如果无效则重新训练
     model = load_special_model()
     if model is None:
         print("🔄 正在重新训练特别号 XGBoost 模型...")
         model = train_special_model(rows)
 
     if args.show:
-        # 特别号数字
         main_num, prob, defenses = predict_special_number(rows, model, top_k=5)
         conf_label = get_confidence_label(prob)
-
-        # 特五肖
         zodiacs = predict_strong_five(rows, {}, miss_streak=0)
-
-        # 规则对照
         try:
             sp_rule, def_rule = get_special_number_recommendation(rows, top_n=3, recent_window=30)
         except:
@@ -213,9 +197,7 @@ def main():
         print(f"防守(5码): {' '.join(f'{n:02d}' for n in defenses[:5])}")
         if sp_rule:
             print(f"规则主推: {sp_rule:02d} (防守: {' '.join(f'{n:02d}' for n in def_rule[:2])})")
-
         print(f"\n【特五肖推荐】: {'、'.join(zodiacs)}")
-
         stats10 = backtest_special_zodiac(rows, 10)
         if stats10:
             print(f"\n近10期回测：特五肖命中率 {stats10['hit_rate']:.1%}，最大连空 {stats10['max_miss']}")
