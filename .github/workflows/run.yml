@@ -25,15 +25,18 @@ jobs:
           pip install -r requirements.txt
           pip install optuna
 
-      - name: 每周优化参数（可选）
-        if: github.event_name == 'schedule' && github.run_number % 7 == 0
+      - name: 参数优化（若 best_params.json 不存在）
         run: |
-          python optimize_windows.py
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add best_params.json
-          git commit -m "Weekly parameter optimization" || echo "No changes"
-          git push || echo "Push failed"
+          if [ ! -f "best_params.json" ]; then
+            python optimize_windows.py
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add best_params.json
+            git commit -m "Initial parameter optimization" || echo "No changes"
+            git push || echo "Push failed"
+          else
+            echo "best_params.json 已存在，跳过优化"
+          fi
 
       - name: 生肖预测（使用最佳参数）
         run: python zodiac_main.py --show
