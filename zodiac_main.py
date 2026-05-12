@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# zodiac_main.py - 一二三生肖最终版（稳健连空保护）
+# zodiac_main.py - 一二三生肖最终版（三生肖需中2个才计命中）
 
 import argparse
 import json
@@ -64,10 +64,10 @@ def backtest_zodiac_stats(rows, lookback):
         pred_two_raw = [z for z, _ in votes_two.most_common(2)]
         pred_three_raw = [z for z, _ in votes_three.most_common(3)]
 
-        # ----- 一生肖：不做激进干预，仅用原始投票 -----
+        # 一生肖：采用原始投票结果（不干预）
         pred_single = pred_single_raw
 
-        # ----- 二生肖保护：连空>=2 时补入最冷生肖（稳健）-----
+        # 二生肖保护：连空≥2时补入最冷生肖
         if miss_two >= 2:
             omission = _zodiac_omission_map(train)
             if omission:
@@ -76,7 +76,7 @@ def backtest_zodiac_stats(rows, lookback):
                     pred_two_raw[-1] = coldest
         pred_two = pred_two_raw
 
-        # ----- 三生肖保护：连空>=3 时，使用“二生肖 + 原始三生肖第三位”-----
+        # 三生肖保护：连空≥3时，使用“二生肖 + 原始三生肖的第三位”
         if miss_three >= 3:
             third_choice = pred_three_raw[2] if len(pred_three_raw) > 2 else pred_three_raw[0]
             pred_three = list(dict.fromkeys(pred_two + [third_choice]))[:3]
@@ -99,9 +99,9 @@ def backtest_zodiac_stats(rows, lookback):
             miss_two += 1
             max_miss_two = max(max_miss_two, miss_two)
 
-        # 统计三生肖（命中至少1个即算中）
+        # 统计三生肖：必须命中至少2个（严格条件）
         hit_cnt = sum(1 for z in pred_three if z in win_z)
-        if hit_cnt >= 1:
+        if hit_cnt >= 2:
             hits_three += 1
             miss_three = 0
         else:
