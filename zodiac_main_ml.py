@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# zodiac_main_ml.py - 机器学习版生肖预测（带二生肖回测）
+# zodiac_main_ml.py - 机器学习版生肖预测（含全部模式回测）
 
 import argparse
 import json
@@ -18,8 +18,12 @@ def get_history_rows_as_list(limit=None):
         })
     return rows
 
-def backtest_ml(rows, lookback, k=2):
-    """回测机器学习模型命中率和最大连空（注意：模型固定，有轻微未来信息）"""
+def backtest_zodiac(rows, lookback, k, strict_three=False):
+    """
+    回测生肖模式
+    k: 预测个数 (1,2,3)
+    strict_three: 仅当 k==3 时生效，True表示需要命中至少2个才算中，False表示命中1个就算中
+    """
     rows_rev = list(reversed(rows))
     total = min(lookback, len(rows_rev) - 20)
     if total <= 0:
@@ -28,19 +32,30 @@ def backtest_ml(rows, lookback, k=2):
     miss_streak = 0
     max_miss = 0
     for i in range(total):
-        train = rows_rev[i+20:]  # 使用 i+20 之后的所有历史（固定模型）
+        train = rows_rev[i+20:]
         actual = rows_rev[i]
         win_main = json.loads(actual["numbers_json"])
         win_sp = actual["special_number"]
         win_z = {get_zodiac_by_number(n) for n in win_main}
         win_z.add(get_zodiac_by_number(win_sp))
-        pred_z = predict_top_k_zodiac(train, k=k)
-        if any(z in win_z for z in pred_z):
-            hits += 1
-            miss_streak = 0
+        pred = predict_top_k_zodiac(train, k=k)
+        if k == 3 and strict_three:
+            # 三生肖必须命中至少2个
+            hit_cnt = sum(1 for z in pred if z in win_z)
+            if hit_cnt >= 2:
+                hits += 1
+                miss_streak = 0
+            else:
+                miss_streak += 1
+                max_miss = max(max_miss, miss_streak)
         else:
-            miss_streak += 1
-            max_miss = max(max_miss, miss_streak)
+            # 一生肖或二生肖：至少命中1个
+            if any(z in win_z for z in pred):
+                hits += 1
+                miss_streak = 0
+            else:
+                miss_streak += 1
+                max_miss = max(max_miss, miss_streak)
     return hits/total, max_miss
 
 def main():
@@ -52,6 +67,7 @@ def main():
         print("数据获取失败")
         return
     if args.show:
+        # 当前预测
         two = predict_top_k_zodiac(rows, k=2)
         three = predict_top_k_zodiac(rows, k=3)
         single = three[0]
@@ -61,12 +77,23 @@ def main():
         print(f"二生肖 (ML): {'、'.join(two)}")
         print(f"三生肖 (ML): {'、'.join(three)}")
 
-        # 二生肖回测
-        hit10, miss10 = backtest_ml(rows, lookback=10, k=2)
-        hit100, miss100 = backtest_ml(rows, lookback=100, k=2)
-        if hit10 is not None:
-            print(f"\n近10期回测（二生肖）: 命中率 {hit10:.1%}, 最大连空 {miss10}")
-            print(f"近100期回测（二生肖）: 命中率 {hit100:.1%}, 最大连空 {miss100}")
+        # 回测一生肖
+        hit10_s, miss10_s = backtest_zodiac(rows, 10, k=1)
+        hit100_s, miss100_s = backtest_zodiac(rows, 100, k=1)
+        print(f"\n近10期回测（一生肖）: 命中率 {hit10_s:.1%}, 最大连空 {miss10_s}")
+        print(f"近100期回测（一生肖）: 命中率 {hit100_s:.1%}, 最大连空 {miss100_s}")
+
+        # 回测二生肖
+        hit10_t, miss10_t = backtest_zodiac(rows, 10, k=2)
+        hit100_t, miss100_t = backtest_zodiac(rows, 100, k=2)
+        print(f"\n近10期回测（二生肖）: 命中率 {hit10_t:.1%}, 最大连空 {miss10_t}")
+        print(f"近100期回测（二生肖）: 命中率 {hit100_t:.1%}, 最大连空 {miss100_t}")
+
+        # 回测三生肖（严格：中2个）
+        hit10_th, miss10_th = backtest_zodiac(rows, 10, k=3, strict_three=True)
+        hit100_th, miss100_th = backtest_zodiac(rows, 100, k=3, strict_three=True)
+        print(f"\n近10期回测（三生肖，需中2个）: 命中率 {hit10_th:.1%}, 最大连空 {miss10_th}")
+        print(f"近100期回测（三生肖，需中2个）: 命中率 {hit100_th:.1%}, 最大连空 {miss100_th}")
 
 if __name__ == "__main__":
     main()
