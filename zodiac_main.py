@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
-# zodiac_main.py - 全面升级版（三生肖严格中2个）
+# zodiac_main.py - 三生肖严格中2个，带智能连空保护
 
 import argparse
 import json
 from collections import Counter
 from common import fetch_hk_records_merged, get_zodiac_by_number, next_issue
 from strategies_zodiac import (
-    predict_strong_single, predict_strong_two, predict_strong_three_with_window,
+    predict_strong_single, predict_strong_two, predict_strong_three_improved,
     _zodiac_omission_map, get_hot_zodiac, get_cold_zodiac
 )
 
 OPTIMAL_WINDOWS = [8, 10, 12, 18, 20, 30]
-XGB_WEIGHT = 0.0  # 暂不启用
+XGB_WEIGHT = 0.0
 
 def get_history_rows_as_list(limit=None):
     records = fetch_hk_records_merged(limit=limit, prefer_local=True)
@@ -58,35 +58,39 @@ def backtest_zodiac_stats(rows, lookback):
             votes_single[predict_strong_single(train, {"single_recent_window": w, "single_special_boost": 3.2}, xgb_weight=XGB_WEIGHT)] += 1
             for p in predict_strong_two(train, {"two_recent_window": w, "two_special_boost": 3.0}, xgb_weight=XGB_WEIGHT):
                 votes_two[p] += 1
-            for p in predict_strong_three_with_window(train, w, xgb_weight=XGB_WEIGHT):
+            # 三生肖使用改进版预测（衰减权重）
+            for p in predict_strong_three_improved(train, w, use_decay=True, xgb_weight=XGB_WEIGHT):
                 votes_three[p] += 1
 
         pred_single_raw = votes_single.most_common(1)[0][0]
         pred_two_raw = [z for z, _ in votes_two.most_common(2)]
         pred_three_raw = [z for z, _ in votes_three.most_common(3)]
 
-        # ----- 一生肖动态保护：连空>=3时追热 -----
+        # 一生肖动态保护：连空>=3时追热
         if miss_single >= 3:
             hot = get_hot_zodiac(train, window=10)
             pred_single = hot
         else:
             pred_single = pred_single_raw
 
-        # ----- 二生肖保护：连空>=2补入最冷 -----
+        # 二生肖保护：连空>=2补入最冷
         if miss_two >= 2:
             cold = get_cold_zodiac(train, window=30)
             if cold not in pred_two_raw:
                 pred_two_raw[-1] = cold
         pred_two = pred_two_raw
 
-        # ----- 三生肖保护：连空>=3时使用“二生肖 + 最热”组合（仍保持判定标准为中2个）-----
-        if miss_three >= 3:
+        # ***** 三生肖智能保护 *****
+        # 如果已经连续2期未中（严格中2个），则使用“二生肖 + 最热生肖”的组合
+        if miss_three >= 2:
             hot = get_hot_zodiac(train, window=10)
-            pred_three = list(dict.fromkeys(pred_two + [hot]))[:3]
+            # 合并二生肖和热肖，去重后取前3
+            combined = list(dict.fromkeys(pred_two + [hot]))
+            pred_three = combined[:3]
         else:
             pred_three = pred_three_raw[:3]
 
-        # 统计
+        # 统计一生肖
         if pred_single in win_z:
             hits_single += 1
             miss_single = 0
@@ -94,6 +98,7 @@ def backtest_zodiac_stats(rows, lookback):
             miss_single += 1
             max_miss_single = max(max_miss_single, miss_single)
 
+        # 统计二生肖
         if any(z in win_z for z in pred_two):
             hits_two += 1
             miss_two = 0
@@ -101,7 +106,7 @@ def backtest_zodiac_stats(rows, lookback):
             miss_two += 1
             max_miss_two = max(max_miss_two, miss_two)
 
-        # 三生肖：必须命中至少2个（严格条件）
+        # 统计三生肖（严格：必须命中至少2个）
         hit_cnt = sum(1 for z in pred_three if z in win_z)
         if hit_cnt >= 2:
             hits_three += 1
@@ -138,7 +143,7 @@ def main():
             votes_single[predict_strong_single(rows, {"single_recent_window": w, "single_special_boost": 3.2}, xgb_weight=XGB_WEIGHT)] += 1
             for p in predict_strong_two(rows, {"two_recent_window": w, "two_special_boost": 3.0}, xgb_weight=XGB_WEIGHT):
                 votes_two[p] += 1
-            for p in predict_strong_three_with_window(rows, w, xgb_weight=XGB_WEIGHT):
+            for p in predict_strong_three_improved(rows, w, use_decay=True, xgb_weight=XGB_WEIGHT):
                 votes_three[p] += 1
 
         single = votes_single.most_common(1)[0][0]
