@@ -9,25 +9,24 @@ from collections import Counter
 from datetime import datetime
 from common import fetch_hk_records_merged, get_zodiac_by_number, ZODIAC_MAP, ZODIAC_PAIR
 
-# ---------- 1. 构建生肖排序特征（用于二生肖/三生肖）----------
+# ---------- 1. 构建生肖排序特征（每个生肖独立样本）----------
 def build_ranking_features(rows):
     """
     rows: 降序排列的历史记录（最新在前）
-    返回 X (samples * 12 * features), y (samples * 12) 标签为0/1表示该生肖是否出现在当期开奖中
+    返回 X (总样本数 = 期数 * 12), y (0/1), group (每期12)
     """
-    X, y = [], []
+    X, y, group = [], [], []
     # 使用滑动窗口：用前20期预测下一期
     for idx in range(20, len(rows) - 1):
-        train_rows = rows[idx-20:idx]  # 前20期
-        target_row = rows[idx]         # 下一期
+        train_rows = rows[idx-20:idx]   # 前20期
+        target_row = rows[idx]          # 下一期
         # 目标生肖集合
         target_zodiacs = set()
         for n in target_row["numbers"]:
             target_zodiacs.add(get_zodiac_by_number(n))
         target_zodiacs.add(get_zodiac_by_number(target_row["special_number"]))
-        
+
         # 为每个生肖构造特征
-        row_features = []
         for z in ZODIAC_MAP.keys():
             # 特征1: 近10期出现次数
             cnt10 = 0
@@ -43,7 +42,7 @@ def build_ranking_features(rows):
                 sp = r["special_number"]
                 if any(get_zodiac_by_number(n) == z for n in nums) or get_zodiac_by_number(sp) == z:
                     cnt20 += 1
-            # 特征3: 遗漏期数（从最近一期往前数）
+            # 特征3: 遗漏期数
             omission = 0
             for r in train_rows:
                 nums = r["numbers"]
@@ -63,18 +62,14 @@ def build_ranking_features(rows):
             # 特征5: 最近一期特别号是否是该生肖
             last_sp_zod = get_zodiac_by_number(train_rows[0]["special_number"])
             is_last = 1 if last_sp_zod == z else 0
-            row_features.extend([cnt10, cnt20, omission, pair_cnt, is_last])
-        X.append(row_features)
-        y.append([1 if z in target_zodiacs else 0 for z in ZODIAC_MAP.keys()])
-    return np.array(X), np.array(y)
+            X.append([cnt10, cnt20, omission, pair_cnt, is_last])
+            y.append(1 if z in target_zodiacs else 0)
+        group.append(12)   # 每期对应12个样本
+    return np.array(X), np.array(y), np.array(group)
 
-def train_ranking_model(X, y):
+def train_ranking_model(X, y, group):
     """训练LightGBM lambdarank模型"""
-    # 展平标签
-    y_flat = y.flatten()
-    # 每个样本对应12个生肖，group = 12
-    groups = np.repeat(12, len(X))
-    dataset = lgb.Dataset(X, label=y_flat, group=groups)
+    dataset = lgb.Dataset(X, label=y, group=group)
     params = {
         'objective': 'lambdarank',
         'metric': 'ndcg',
@@ -139,7 +134,7 @@ def train_special_xgb(X, y):
 def main():
     print("加载历史数据...")
     rows = fetch_hk_records_merged(limit=None, prefer_local=True)
-    # 转换为列表字典（兼容代码）
+    # 转换为内部格式
     records = []
     for r in rows:
         records.append({
@@ -152,17 +147,17 @@ def main():
 
     # 1. 训练生肖排序模型
     print("构建生肖排序特征...")
-    X_zod, y_zod = build_ranking_features(records)
-    print(f"样本数: {len(X_zod)}")
+    X_zod, y_zod, group_zod = build_ranking_features(records)
+    print(f"样本数: {X_zod.shape[0]}, 期数: {len(group_zod)}")
     print("训练LightGBM排序模型...")
-    zod_model = train_ranking_model(X_zod, y_zod)
+    zod_model = train_ranking_model(X_zod, y_zod, group_zod)
     zod_model.save_model("zodiac_ranker.txt")
     print("✅ 生肖模型已保存为 zodiac_ranker.txt")
 
     # 2. 训练特别号多分类模型
     print("构建特别号特征...")
     X_spec, y_spec = build_special_features(records, window=30)
-    print(f"样本数: {len(X_spec)}")
+    print(f"样本数: {X_spec.shape[0]}")
     print("训练XGBoost多分类模型...")
     spec_model = train_special_xgb(X_spec, y_spec)
     spec_model.save_model("special_xgb.json")
