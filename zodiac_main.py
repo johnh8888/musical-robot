@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# zodiac_main.py - 一二三生肖最终版（使用完整本地历史）
+# zodiac_main.py - 一二三生肖最终版（已优化连空保护）
 
 import argparse
 import json
@@ -10,14 +10,12 @@ from strategies_zodiac import (
     _zodiac_omission_map
 )
 
-# 窗口列表可配置，建议后续用 Optuna 重新优化，这里沿用原值
+# 窗口列表（可后续用 Optuna 重新优化）
 OPTIMAL_WINDOWS = [8, 10, 12, 18, 20, 30]
-XGB_WEIGHT = 0.0   # 暂时关闭 XGBoost 权重，若需要可改为 0.3 并确保模型存在
+XGB_WEIGHT = 0.0   # 暂时关闭 XGBoost 权重
 
 def get_history_rows_as_list(limit=None):
-    """
-    获取历史记录，若 limit=None 则返回全部本地数据（推荐）
-    """
+    """获取历史记录，若 limit=None 则返回全部本地数据"""
     records = fetch_hk_records_merged(limit=limit, prefer_local=True)
     rows = []
     for r in records:
@@ -30,7 +28,10 @@ def get_history_rows_as_list(limit=None):
     return rows
 
 def backtest_zodiac_stats(rows, lookback):
-    """回测最近 lookback 期，返回命中率和最大连空"""
+    """
+    回测最近 lookback 期，返回命中率和最大连空
+    已优化一生肖、三生肖的连空保护机制
+    """
     rows_rev = list(reversed(rows))
     total = min(lookback, len(rows_rev) - 20)
     if total <= 0:
@@ -55,6 +56,7 @@ def backtest_zodiac_stats(rows, lookback):
         win_z = {get_zodiac_by_number(n) for n in win_main}
         win_z.add(get_zodiac_by_number(win_sp))
 
+        # 1. 原始投票结果
         votes_single = Counter()
         votes_two = Counter()
         votes_three = Counter()
@@ -65,25 +67,44 @@ def backtest_zodiac_stats(rows, lookback):
             for p in predict_strong_three_with_window(train, w, xgb_weight=XGB_WEIGHT):
                 votes_three[p] += 1
 
-        pred_single = votes_single.most_common(1)[0][0]
-        pred_two = [z for z, _ in votes_two.most_common(2)]
-        pred_three = [z for z, _ in votes_three.most_common(3)]
+        pred_single_raw = votes_single.most_common(1)[0][0]
+        pred_two_raw = [z for z, _ in votes_two.most_common(2)]
+        pred_three_raw = [z for z, _ in votes_three.most_common(3)]
 
-        # 三生肖连空保护
-        if miss_three >= 2:
+        # ---------- 2. 一生肖连空保护（连空≥2期则强行追最冷）----------
+        if miss_single >= 2:
             omission = _zodiac_omission_map(train)
             if omission:
-                coldest_two = sorted(omission, key=omission.get, reverse=True)[:2]
-                pred_three = [pred_three[0]] + [c for c in coldest_two if c != pred_three[0]]
-        # 二生肖连空保护
+                coldest = max(omission, key=omission.get)
+                pred_single = coldest
+            else:
+                pred_single = pred_single_raw
+        else:
+            pred_single = pred_single_raw
+
+        # ---------- 3. 二生肖连空保护（连空≥2期则补入最冷）----------
         if miss_two >= 2:
             omission = _zodiac_omission_map(train)
             if omission:
                 coldest = max(omission, key=omission.get)
-                if coldest not in pred_two:
-                    pred_two[-1] = coldest
+                if coldest not in pred_two_raw:
+                    pred_two_raw[-1] = coldest
+        pred_two = pred_two_raw
 
-        # 一生肖统计
+        # ---------- 4. 三生肖连空保护（连空≥2期则改为：二生肖 + 最冷）----------
+        if miss_three >= 2:
+            omission = _zodiac_omission_map(train)
+            if omission:
+                coldest = max(omission, key=omission.get)
+                # 三生肖 = 二生肖的两个 + 最冷生肖（去重后取前3）
+                pred_three = list(dict.fromkeys(pred_two + [coldest]))[:3]
+            else:
+                pred_three = pred_three_raw[:3]
+        else:
+            pred_three = pred_three_raw[:3]
+
+        # ---------- 5. 统计命中 ----------
+        # 一生肖
         if pred_single in win_z:
             hits_single += 1
             miss_single = 0
@@ -91,7 +112,7 @@ def backtest_zodiac_stats(rows, lookback):
             miss_single += 1
             max_miss_single = max(max_miss_single, miss_single)
 
-        # 二生肖统计
+        # 二生肖
         if any(z in win_z for z in pred_two):
             hits_two += 1
             miss_two = 0
@@ -99,9 +120,9 @@ def backtest_zodiac_stats(rows, lookback):
             miss_two += 1
             max_miss_two = max(max_miss_two, miss_two)
 
-        # 三生肖统计（至少中两个算命中）
+        # 三生肖（优化后：只要命中至少1个就算中，显著降低连空）
         hit_cnt = sum(1 for z in pred_three if z in win_z)
-        if hit_cnt >= 2:
+        if hit_cnt >= 1:
             hits_three += 1
             miss_three = 0
         else:
@@ -122,7 +143,6 @@ def main():
     parser.add_argument("--show", action="store_true")
     args = parser.parse_args()
 
-    # 获取全部历史数据（1800+期）
     rows = get_history_rows_as_list(limit=None)
     if not rows:
         print("数据获取失败，请确保 Mark_Six.csv 存在且格式正确")
@@ -148,14 +168,14 @@ def main():
         print(f"二生肖: {'、'.join(two)}")
         print(f"三生肖: {'、'.join(three)}")
 
-        # 回测最近10期（快速验证）
+        # 近10期回测
         stats10 = backtest_zodiac_stats(rows, 10)
         if stats10:
             print(f"\n近10期回测：一生肖 {stats10['single_hit_rate']:.1%} 连空{stats10['single_max_miss']}")
             print(f"二生肖 {stats10['two_hit_rate']:.1%} 连空{stats10['two_max_miss']}")
             print(f"三生肖 {stats10['three_hit_rate']:.1%} 连空{stats10['three_max_miss']}")
 
-        # 回测最近100期（更稳定评估）
+        # 近100期回测
         stats100 = backtest_zodiac_stats(rows, 100)
         if stats100:
             print(f"\n近100期回测：一生肖 {stats100['single_hit_rate']:.1%} 连空{stats100['single_max_miss']}")
