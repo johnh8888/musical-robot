@@ -1,80 +1,152 @@
-# strategies_special.py - 特五肖评分（供投票使用）
+#!/usr/bin/env python3
+# strategies_zodiac.py - 生肖预测策略（完整版，含连空保护辅助函数）
 
 import json
-import math
 from collections import Counter
-from typing import List, Dict, Tuple, Optional, Sequence
-from common import ZODIAC_MAP, get_zodiac_by_number, ALL_NUMBERS
+from common import get_zodiac_by_number, ZODIAC_MAP, ZODIAC_PAIR
 
-def _row_numbers(r):
-    try:
-        if isinstance(r, dict): return json.loads(r["numbers_json"])
-        if hasattr(r,"keys") and "numbers_json" in r.keys(): return json.loads(r["numbers_json"])
-        return json.loads(r[0]) if isinstance(r[0],str) else r[0]
-    except: return []
+# ---------- 辅助函数 ----------
+def _row_numbers(row):
+    """从 row 中解析出正码列表"""
+    return json.loads(row["numbers_json"])
 
-def _row_special(r):
-    try:
-        if isinstance(r, dict): return int(r["special_number"])
-        if hasattr(r,"keys") and "special_number" in r.keys(): return int(r["special_number"])
-        return int(r[1])
-    except: return 0
+def _row_special(row):
+    return row["special_number"]
 
 def _zodiac_omission_map(rows):
-    omission = {z: len(rows)+1 for z in ZODIAC_MAP}
-    for i,row in enumerate(rows):
-        nums = _row_numbers(row)
-        sp = _row_special(row)
-        if not nums: continue
-        appeared = set()
-        for n in nums: appeared.add(get_zodiac_by_number(n))
-        if sp!=0: appeared.add(get_zodiac_by_number(sp))
-        for z in appeared:
-            if omission[z] > i+1: omission[z] = i+1
+    """计算每个生肖的遗漏期数（rows 降序，最新在前）"""
+    omission = {z: 0 for z in ZODIAC_MAP}
+    found = {z: False for z in ZODIAC_MAP}
+    for i, row in enumerate(rows):
+        # 正码
+        for n in _row_numbers(row):
+            z = get_zodiac_by_number(n)
+            if not found[z]:
+                found[z] = True
+                omission[z] = i
+        # 特别号
+        z_sp = get_zodiac_by_number(_row_special(row))
+        if not found[z_sp]:
+            found[z_sp] = True
+            omission[z_sp] = i
+        if all(found.values()):
+            break
+    # 从未出现过的生肖，遗漏设置为 len(rows)
+    for z in ZODIAC_MAP:
+        if not found[z]:
+            omission[z] = len(rows)
     return omission
 
-def compute_special_five_score(rows, recent_window=20):
-    scores = {z:0.0 for z in ZODIAC_MAP}
-    specials = [_row_special(r) for r in rows]
-    seq = [get_zodiac_by_number(sp) for sp in specials]
-    n = len(seq)
-    if n==0: return {z:1.0 for z in ZODIAC_MAP}
-    for i,z in enumerate(seq[:recent_window]):
-        w = math.exp(-i/15.0)
-        scores[z] += 5.0 * w
-    omission = {z:0 for z in ZODIAC_MAP}
-    for i,z in enumerate(seq):
-        if omission[z]==0: omission[z]=i+1
-    for z,omit in omission.items():
-        scores[z] += math.log(omit+1)*2.0
+def _compute_zodiac_score(rows, recent_window=15, special_boost=3.0):
+    """计算每个生肖的综合得分（规则评分）"""
+    scores = {}
+    for z in ZODIAC_MAP:
+        nums = ZODIAC_MAP[z]
+        # 基础分：近期正码出现次数
+        base = 0
+        for r in rows[:recent_window]:
+            for n in _row_numbers(r):
+                if n in nums:
+                    base += 1
+        # 特别号加权
+        special_bonus = 0
+        for r in rows[:recent_window]:
+            if _row_special(r) in nums:
+                special_bonus += special_boost
+        # 六合彩对肖加成（六合彩有6对肖，但这里是生肖对，使用 ZODIAC_PAIR）
+        pair = ZODIAC_PAIR.get(z)
+        if pair:
+            # 对肖的出现也给予小幅加成
+            pair_bonus = 0
+            pair_nums = ZODIAC_MAP.get(pair, [])
+            for r in rows[:recent_window]:
+                for n in _row_numbers(r):
+                    if n in pair_nums:
+                        pair_bonus += 0.5
+                if _row_special(r) in pair_nums:
+                    pair_bonus += 0.5
+            base += pair_bonus
+        scores[z] = base + special_bonus
     return scores
 
-def get_special_number_recommendation(rows, top_n=3, main_pool=None, recent_window=30):
-    # 与原版相同，保留作为规则对照
-    if len(rows)<5: return 1,[2,3]
-    recent_specials = [_row_special(r) for r in rows[:recent_window]]
-    omission = {}
-    for i,sp in enumerate(recent_specials):
-        if sp not in omission: omission[sp]=i+1
-    recent_3_set = set(recent_specials[:3])
-    main_set = set(main_pool) if main_pool else set()
-    tail_counts = Counter([sp%10 for sp in recent_specials[:40]])
-    coldest_tail = min(tail_counts, key=lambda t:tail_counts[t]) if tail_counts else 0
-    scores = {}
-    for n in ALL_NUMBERS:
-        omit = omission.get(n,30)
-        score = math.log(omit+1)*2.0
-        neighbors = {n-1,n-2,n-3,n+1,n+2,n+3} & set(ALL_NUMBERS)
-        if neighbors:
-            min_omit = min(omission.get(m,30) for m in neighbors)
-            neighbor_score = 1.0 - (min_omit-1)*0.03
-            neighbor_score = max(0.0, min(1.0, neighbor_score))
-            score += neighbor_score*2.5
-        if n in recent_3_set: score *= 0.6
-        if main_set and n in main_set: score *=0.7
-        if n%10 == coldest_tail: score +=3.0
-        scores[n]=max(0.0,score)
-    sorted_nums = sorted(scores.items(), key=lambda x:-x[1])
-    primary = sorted_nums[0][0]
-    defenses = [n for n,_ in sorted_nums[1:4]]
-    return primary, defenses[:top_n-1]
+# ---------- 单一生肖预测 ----------
+def predict_strong_single(rows, params, xgb_weight=0.0, xgb_model=None):
+    """
+    基于规则预测单一生肖，可选融合 XGBoost 概率
+    params: {"single_recent_window": int, "single_special_boost": float}
+    """
+    window = params.get("single_recent_window", 15)
+    boost = params.get("single_special_boost", 3.0)
+    scores = _compute_zodiac_score(rows, recent_window=window, special_boost=boost)
+    rule_top = max(scores, key=scores.get)
+    if xgb_weight <= 0 or xgb_model is None:
+        return rule_top
+    # 融合 XGBoost 概率（待实现）
+    return rule_top
+
+# ---------- 二生肖预测 ----------
+def predict_strong_two(rows, params, xgb_weight=0.0, xgb_model=None):
+    """
+    预测两个生肖，返回列表
+    params: {"two_recent_window": int, "two_special_boost": float}
+    """
+    window = params.get("two_recent_window", 15)
+    boost = params.get("two_special_boost", 3.0)
+    scores = _compute_zodiac_score(rows, recent_window=window, special_boost=boost)
+    sorted_z = sorted(scores.items(), key=lambda x: -x[1])
+    rule_two = [z for z, _ in sorted_z[:2]]
+    if xgb_weight <= 0 or xgb_model is None:
+        return rule_two
+    # 融合逻辑（略）
+    return rule_two
+
+# ---------- 三生肖预测 ----------
+def predict_strong_three_with_window(rows, window, xgb_weight=0.0, xgb_model=None):
+    """
+    基于指定窗口预测三个生肖
+    """
+    scores = _compute_zodiac_score(rows, recent_window=window, special_boost=3.0)
+    sorted_z = sorted(scores.items(), key=lambda x: -x[1])
+    return [z for z, _ in sorted_z[:3]]
+
+# ---------- 新增：追热/追冷辅助（用于连空保护） ----------
+def get_hot_zodiac(rows, window=10):
+    """
+    返回最近 window 期内出现次数最多的生肖（用于追热）
+    rows: 历史记录列表（降序，最新在前）
+    """
+    zodiacs = []
+    for r in rows[:window]:
+        for n in _row_numbers(r):
+            zodiacs.append(get_zodiac_by_number(n))
+        zodiacs.append(get_zodiac_by_number(_row_special(r)))
+    cnt = Counter(zodiacs)
+    if not cnt:
+        return "鼠"
+    return cnt.most_common(1)[0][0]
+
+def get_cold_zodiac(rows, window=30):
+    """
+    返回遗漏最大的生肖（用于追冷）
+    基于最近 window 期内的出现情况计算遗漏
+    """
+    omission = {z: 0 for z in ZODIAC_MAP}
+    found = {z: False for z in ZODIAC_MAP}
+    for i, r in enumerate(rows[:window]):
+        for n in _row_numbers(r):
+            z = get_zodiac_by_number(n)
+            if not found[z]:
+                found[z] = True
+                omission[z] = i
+        z_sp = get_zodiac_by_number(_row_special(r))
+        if not found[z_sp]:
+            found[z_sp] = True
+            omission[z_sp] = i
+        if all(found.values()):
+            break
+    for z in ZODIAC_MAP:
+        if not found[z]:
+            omission[z] = len(rows[:window])
+    # 返回遗漏最大的生肖（值越大表示越冷）
+    coldest = max(omission, key=omission.get)
+    return coldest
