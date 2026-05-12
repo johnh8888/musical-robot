@@ -1,156 +1,86 @@
 #!/usr/bin/env python3
-# special_only.py - 特别号数字预测 + 特五肖回测统计（最终稳定版）
+# special_only.py - 特别号数字 + 特五肖（频率升级版）
 
 import argparse
 import json
-import pickle
-import os
 from collections import Counter
-from datetime import datetime
-import xgboost as xgb
-import numpy as np
 from common import fetch_hk_records_merged, get_zodiac_by_number, next_issue, ZODIAC_MAP
-from strategies_special import get_special_number_recommendation, compute_special_five_score
 
-# ---------- 特征工程 ----------
-def extract_features_for_special(rows, target_num):
+# ---------- 特别号数字预测（基于频率+遗漏）----------
+def predict_special_number_freq(rows, top_k=5):
     specials = [r["special_number"] for r in rows]
-    # 遗漏
-    omission = 0
-    for sp in specials[::-1]:
-        if sp != target_num:
-            omission += 1
-        else:
-            break
-    cnt10 = sum(1 for sp in specials[:10] if sp == target_num)
-    cnt20 = sum(1 for sp in specials[:20] if sp == target_num)
-    latest_sp = specials[0] if specials else 0
-    diff = abs(target_num - latest_sp) if latest_sp else 99
-    diff_feat = min(diff, 9) / 9.0
-    tail = target_num % 10
-    wd = -1
-    if rows and "draw_date" in rows[0]:
-        try:
-            wd = datetime.strptime(rows[0]["draw_date"], "%Y-%m-%d").weekday()
-        except:
-            pass
-    recent = sum(1 for sp in specials[:5] if sp == target_num)
-    old = sum(1 for sp in specials[5:10] if sp == target_num)
-    change = recent - old
-    same_tail = 1 if (latest_sp % 10) == (target_num % 10) else 0
-    return [omission, cnt10, cnt20, diff_feat, tail, wd, change, same_tail]
-
-def train_special_model(rows, model_path="special_model.pkl"):
-    X, y = [], []
-    for i in range(30, len(rows)):
-        hist = rows[i-20:i]
-        target = rows[i]["special_number"]
-        for n in range(1, 50):
-            X.append(extract_features_for_special(hist, n))
-            y.append(1 if n == target else 0)
-    model = xgb.XGBClassifier(
-        n_estimators=150,
-        max_depth=6,
-        learning_rate=0.05,
-        subsample=0.8,
-        colsample_bytree=0.8,
-        use_label_encoder=False,
-        eval_metric='logloss',
-        random_state=42
-    )
-    model.fit(np.array(X), np.array(y))
-    if os.path.exists(model_path):
-        os.remove(model_path)
-    with open(model_path, "wb") as f:
-        pickle.dump(model, f)
-    print(f"✅ 特别号模型已保存至 {model_path}，训练样本数: {len(X)}")
-    return model
-
-def load_special_model(model_path="special_model.pkl"):
-    if not os.path.exists(model_path):
-        return None
-    try:
-        with open(model_path, "rb") as f:
-            obj = pickle.load(f)
-        if hasattr(obj, 'predict_proba'):
-            return obj
-        else:
-            print(f"⚠️ 旧模型格式错误（{type(obj).__name__}），将重新训练")
-            return None
-    except Exception as e:
-        print(f"⚠️ 加载模型失败: {e}")
-        return None
-
-def predict_special_number(rows, model, top_k=5):
-    probs = []
+    # 统计近100期频率
+    recent = specials[:100]
+    counter = Counter(recent)
+    # 加入遗漏加权：遗漏越大越有可能出（冷号回补）
+    omission_weights = {}
     for n in range(1, 50):
-        feats = extract_features_for_special(rows, n)
-        prob = model.predict_proba([feats])[0][1]
-        probs.append((n, prob))
-    probs.sort(key=lambda x: -x[1])
-    main_num = probs[0][0]
-    main_prob = probs[0][1]
-    defenses = [n for n, _ in probs[1:1+top_k]]
-    return main_num, main_prob, defenses
+        omission = 0
+        for sp in specials:
+            if sp != n:
+                omission += 1
+            else:
+                break
+        omission_weights[n] = min(omission / 30, 1.0)  # 归一化
+    # 综合得分 = 频率分(0-1) + 0.3*遗漏分
+    scores = {}
+    for n in range(1, 50):
+        freq_score = counter.get(n, 0) / max(counter.values()) if counter else 0
+        scores[n] = freq_score + 0.3 * omission_weights[n]
+    sorted_nums = sorted(scores.items(), key=lambda x: -x[1])
+    return [n for n, _ in sorted_nums[:top_k]]
 
-def get_confidence_label(prob):
-    if prob >= 0.8:
-        return "高置信度"
-    elif prob >= 0.6:
-        return "中置信度"
-    else:
-        return "低置信度"
-
-# ---------- 特五肖投票预测 ----------
-def predict_strong_five(rows, params, miss_streak=0):
-    windows = [12, 20, 28]
-    votes = Counter()
-    for w in windows:
-        scores = compute_special_five_score(rows, w)
-        ranked = sorted(scores.items(), key=lambda x: -x[1])
-        for z in [ranked[i][0] for i in range(5)]:
-            votes[z] += 1
-    final = [z for z, _ in votes.most_common(5)]
-    if miss_streak >= 2:
-        omission = {z: 0 for z in ZODIAC_MAP}
-        for i, row in enumerate(rows):
-            nums = json.loads(row["numbers_json"])
-            sp = row["special_number"]
-            for n in nums:
-                omission[get_zodiac_by_number(n)] = i + 1
-            omission[get_zodiac_by_number(sp)] = i + 1
-        coldest = max(omission, key=omission.get)
-        if coldest not in final:
-            final[-1] = coldest
-    return final[:5]
+# ---------- 特五肖预测（基于频率+趋势）----------
+def predict_five_zodiac(rows):
+    # 取近50期特别号生肖分布
+    special_zodiacs = []
+    for r in rows[:50]:
+        special_zodiacs.append(get_zodiac_by_number(r["special_number"]))
+    counter = Counter(special_zodiacs)
+    # 权重：出现次数
+    total = sum(counter.values())
+    probs = {z: count/total for z, count in counter.items()}
+    sorted_zod = sorted(probs.items(), key=lambda x: -x[1])
+    return [z for z, _ in sorted_zod[:5]]
 
 def backtest_special_zodiac(rows, lookback):
     rows_rev = list(reversed(rows))
     total = min(lookback, len(rows_rev) - 20)
-    if total <= 0:
-        return None
     hits = 0
     miss_streak = 0
     max_miss = 0
     for i in range(total):
         train = rows_rev[i+20:]
-        if len(train) < 20:
-            continue
         actual = rows_rev[i]
         actual_zod = get_zodiac_by_number(actual["special_number"])
-        picks = predict_strong_five(train, {}, miss_streak)
+        picks = predict_five_zodiac(train)
         if actual_zod in picks:
             hits += 1
             miss_streak = 0
         else:
             miss_streak += 1
             max_miss = max(max_miss, miss_streak)
-    return {"hit_rate": hits / total, "max_miss": max_miss}
+    return hits/total, max_miss
 
-# ---------- 主程序 ----------
-def get_history_rows_as_list(limit=None):
-    records = fetch_hk_records_merged(limit=limit, prefer_local=True)
+def backtest_special_number(rows, lookback):
+    rows_rev = list(reversed(rows))
+    total = min(lookback, len(rows_rev) - 20)
+    hits = 0
+    for i in range(total):
+        train = rows_rev[i+20:]
+        actual = rows_rev[i]["special_number"]
+        preds = predict_special_number_freq(train, top_k=1)
+        if actual == preds[0]:
+            hits += 1
+    return hits/total
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--show", action="store_true")
+    args = parser.parse_args()
+
     rows = []
+    records = fetch_hk_records_merged(limit=None, prefer_local=True)
     for r in records:
         rows.append({
             "numbers_json": json.dumps(r["numbers"]),
@@ -158,52 +88,32 @@ def get_history_rows_as_list(limit=None):
             "draw_date": r["draw_date"],
             "issue_no": r["issue_no"]
         })
-    return rows
-
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--show", action="store_true")
-    parser.add_argument("--train", action="store_true")
-    args = parser.parse_args()
-
-    rows = get_history_rows_as_list(limit=None)
     if not rows:
-        print("❌ 数据获取失败，请确保 Mark_Six.csv 存在")
+        print("❌ 数据获取失败")
         return
-
-    if args.train:
-        train_special_model(rows)
-        return
-
-    model = load_special_model()
-    if model is None:
-        print("🔄 正在重新训练特别号 XGBoost 模型...")
-        model = train_special_model(rows)
 
     if args.show:
-        main_num, prob, defenses = predict_special_number(rows, model, top_k=5)
-        conf_label = get_confidence_label(prob)
-        zodiacs = predict_strong_five(rows, {}, miss_streak=0)
-        try:
-            sp_rule, def_rule = get_special_number_recommendation(rows, top_n=3, recent_window=30)
-        except:
-            sp_rule, def_rule = 0, []
+        # 特别号数字
+        top5 = predict_special_number_freq(rows, top_k=5)
+        main_num = top5[0]
+        defenses = top5[1:5]
+        # 特五肖
+        zodiac5 = predict_five_zodiac(rows)
 
-        latest_issue = rows[0]["issue_no"]
-        pred_issue = next_issue(latest_issue)
+        latest = rows[0]["issue_no"]
+        pred_issue = next_issue(latest)
         print(f"预测期号: {pred_issue}")
         print(f"\n【特别号数字】")
-        print(f"主推: {main_num:02d} (置信度: {conf_label}, 概率:{prob:.2%})")
+        print(f"主推: {main_num:02d} (基于频率+遗漏)")
         print(f"防守(5码): {' '.join(f'{n:02d}' for n in defenses[:5])}")
-        if sp_rule:
-            print(f"规则主推: {sp_rule:02d} (防守: {' '.join(f'{n:02d}' for n in def_rule[:2])})")
-        print(f"\n【特五肖推荐】: {'、'.join(zodiacs)}")
-        stats10 = backtest_special_zodiac(rows, 10)
-        if stats10:
-            print(f"\n近10期回测：特五肖命中率 {stats10['hit_rate']:.1%}，最大连空 {stats10['max_miss']}")
-        stats100 = backtest_special_zodiac(rows, 100)
-        if stats100:
-            print(f"近100期回测：特五肖命中率 {stats100['hit_rate']:.1%}，最大连空 {stats100['max_miss']}")
+        print(f"\n【特五肖推荐】: {'、'.join(zodiac5)}")
+
+        # 回测
+        hit_rate_num = backtest_special_number(rows, 100)
+        print(f"\n特别号数字（主推）近100期命中率: {hit_rate_num:.1%}")
+
+        hit_rate_zod, max_miss_zod = backtest_special_zodiac(rows, 100)
+        print(f"特五肖近100期命中率: {hit_rate_zod:.1%}，最大连空: {max_miss_zod}")
 
 if __name__ == "__main__":
     main()
