@@ -1,0 +1,9 @@
+{
+  "windows": [
+    8
+  ],
+  "single_boost": 3.144794161897795,
+  "two_boost": 1.1270957119989025,
+  "miss_two_threshold": 2,
+  "three_use_strict": true
+}
