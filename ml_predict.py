@@ -2,9 +2,9 @@
 # ml_predict.py - 加载模型并提供预测函数
 
 import json
+import pickle
 import numpy as np
 import lightgbm as lgb
-import xgboost as xgb
 from collections import Counter
 from datetime import datetime
 from common import get_zodiac_by_number, ZODIAC_MAP, ZODIAC_PAIR
@@ -21,17 +21,14 @@ def load_zodiac_model():
 def load_special_model():
     global _special_model
     if _special_model is None:
-        _special_model = xgb.Booster()
-        _special_model.load_model("special_xgb.json")
+        with open("special_xgb.pkl", "rb") as f:
+            _special_model = pickle.load(f)
     return _special_model
 
 def predict_top_k_zodiac(rows, k=2):
-    """使用LightGBM排序模型预测Top K个生肖"""
     model = load_zodiac_model()
-    # 用最近20期数据构造特征（每期12个生肖）
     train_rows = rows[:20]
     features = []
-    # 为每个生肖构造特征（注意：这里 predict 需要一次性输入12个样本）
     for z in ZODIAC_MAP.keys():
         cnt10 = 0
         for r in train_rows[:10]:
@@ -64,15 +61,13 @@ def predict_top_k_zodiac(rows, k=2):
         is_last = 1 if last_sp_zod == z else 0
         features.append([cnt10, cnt20, omission, pair_cnt, is_last])
     X_pred = np.array(features)
-    scores = model.predict(X_pred)  # 返回12个得分
+    scores = model.predict(X_pred)
     scored = [(z, scores[i]) for i, z in enumerate(ZODIAC_MAP.keys())]
     scored.sort(key=lambda x: -x[1])
     return [z for z, _ in scored[:k]]
 
 def predict_special_number_ml(rows, top_k=5):
-    """使用XGBoost多分类预测特别号数字"""
     model = load_special_model()
-    # 用最近30期构造特征
     hist = rows[:30]
     freq = Counter(r["special_number"] for r in hist)
     feats = [freq.get(n, 0) for n in range(1, 50)]
@@ -91,7 +86,6 @@ def predict_special_number_ml(rows, top_k=5):
     return [i+1 for i in top_indices]
 
 def predict_five_zodiac_ml(rows):
-    """特五肖: 使用正码生肖频率（简单有效）"""
     zodiac_cnt = Counter()
     for r in rows[:100]:
         nums = json.loads(r["numbers_json"])
