@@ -18,7 +18,59 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.10'
+name: 香港六合彩预测
 
+on:
+  schedule:
+    - cron: '30 13 * * *'
+  workflow_dispatch:
+
+jobs:
+  predict:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: 安装依赖
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          # 明确安装 xgboost 和 scikit-learn（解决依赖问题）
+          pip install xgboost scikit-learn pandas numpy
+
+      - name: 训练特别号模型（若不存在或格式错误）
+        run: |
+          if [ ! -f "special_model.pkl" ]; then
+            python special_only.py --train
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add special_model.pkl
+            git commit -m "Auto-train special number model" || echo "No changes"
+            git push || echo "Push failed"
+          else
+            echo "特别号模型已存在，跳过训练"
+          fi
+
+      - name: 一二三生肖预测
+        run: python zodiac_main.py --show
+
+      - name: 特别号预测
+        run: python special_only.py --show
+
+      - name: 上传结果
+        uses: actions/upload-artifact@v4
+        with:
+          name: prediction-logs
+          path: |
+            *.txt
       - name: 安装依赖
         run: |
           pip install --upgrade pip
