@@ -1,17 +1,16 @@
 #!/usr/bin/env python3
-# zodiac_main.py - 最终版（三生肖严格中2个）
+# zodiac_main.py - 增强规则版（所有生肖模式回测）
 
 import argparse
 import json
 from collections import Counter
 from common import fetch_hk_records_merged, get_zodiac_by_number, next_issue
 from strategies_zodiac import (
-    predict_strong_single, predict_strong_two, predict_strong_three_improved,
+    predict_strong_single, predict_strong_two, predict_strong_three_with_window,
     get_hot_zodiac, get_cold_zodiac
 )
 
 OPTIMAL_WINDOWS = [8, 10, 12, 18, 20, 30]
-XGB_WEIGHT = 0.0
 
 def get_history_rows_as_list(limit=None):
     records = fetch_hk_records_merged(limit=limit, prefer_local=True)
@@ -54,30 +53,30 @@ def backtest_zodiac_stats(rows, lookback):
         votes_two = Counter()
         votes_three = Counter()
         for w in OPTIMAL_WINDOWS:
-            votes_single[predict_strong_single(train, {"single_recent_window": w, "single_special_boost": 3.2}, xgb_weight=XGB_WEIGHT)] += 1
-            for p in predict_strong_two(train, {"two_recent_window": w, "two_special_boost": 3.0}, xgb_weight=XGB_WEIGHT):
+            votes_single[predict_strong_single(train, {"single_recent_window": w, "single_special_boost": 2.0})] += 1
+            for p in predict_strong_two(train, {"two_recent_window": w, "two_special_boost": 2.0}):
                 votes_two[p] += 1
-            for p in predict_strong_three_improved(train, w, use_decay=True, xgb_weight=XGB_WEIGHT):
+            for p in predict_strong_three_with_window(train, w):
                 votes_three[p] += 1
 
         pred_single_raw = votes_single.most_common(1)[0][0]
         pred_two_raw = [z for z, _ in votes_two.most_common(2)]
         pred_three_raw = [z for z, _ in votes_three.most_common(3)]
 
-        # 一生肖保护
+        # 一生肖保护：连空≥3追热
         if miss_single >= 3:
             pred_single = get_hot_zodiac(train, window=10)
         else:
             pred_single = pred_single_raw
 
-        # 二生肖保护
+        # 二生肖保护：连空≥2补入最冷
         if miss_two >= 2:
             cold = get_cold_zodiac(train, window=30)
             if cold not in pred_two_raw:
                 pred_two_raw[-1] = cold
         pred_two = pred_two_raw
 
-        # 三生肖保护：连空≥2时使用“二生肖 + 最热”
+        # 三生肖保护：连空≥2时使用“二生肖+最热”
         if miss_three >= 2:
             hot = get_hot_zodiac(train, window=10)
             combined = list(dict.fromkeys(pred_two + [hot]))
@@ -100,6 +99,7 @@ def backtest_zodiac_stats(rows, lookback):
             miss_two += 1
             max_miss_two = max(max_miss_two, miss_two)
 
+        # 三生肖：需中2个
         hit_cnt = sum(1 for z in pred_three if z in win_z)
         if hit_cnt >= 2:
             hits_three += 1
@@ -121,23 +121,21 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--show", action="store_true")
     args = parser.parse_args()
-
     rows = get_history_rows_as_list(limit=None)
     if not rows:
         print("数据获取失败")
         return
-
     if args.show:
+        # 当前预测
         votes_single = Counter()
         votes_two = Counter()
         votes_three = Counter()
         for w in OPTIMAL_WINDOWS:
-            votes_single[predict_strong_single(rows, {"single_recent_window": w, "single_special_boost": 3.2}, xgb_weight=XGB_WEIGHT)] += 1
-            for p in predict_strong_two(rows, {"two_recent_window": w, "two_special_boost": 3.0}, xgb_weight=XGB_WEIGHT):
+            votes_single[predict_strong_single(rows, {"single_recent_window": w, "single_special_boost": 2.0})] += 1
+            for p in predict_strong_two(rows, {"two_recent_window": w, "two_special_boost": 2.0}):
                 votes_two[p] += 1
-            for p in predict_strong_three_improved(rows, w, use_decay=True, xgb_weight=XGB_WEIGHT):
+            for p in predict_strong_three_with_window(rows, w):
                 votes_three[p] += 1
-
         single = votes_single.most_common(1)[0][0]
         two = [z for z, _ in votes_two.most_common(2)]
         three = [z for z, _ in votes_three.most_common(3)]
@@ -148,6 +146,7 @@ def main():
         print(f"二生肖: {'、'.join(two)}")
         print(f"三生肖: {'、'.join(three)}")
 
+        # 回测
         stats10 = backtest_zodiac_stats(rows, 10)
         if stats10:
             print(f"\n近10期回测：一生肖 {stats10['single_hit_rate']:.1%} 连空{stats10['single_max_miss']}")
