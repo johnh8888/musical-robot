@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# common.py - 香港六合彩公共模块（支持本地 CSV 合并）
+# common.py - 香港六合彩公共模块（支持本地 CSV 合并，优先使用本地完整历史）
 
 import json
 import re
@@ -59,30 +59,74 @@ def next_issue(issue_no: str) -> str:
     except:
         return issue_no
 
-# ========== 本地 CSV 加载 ==========
-def load_local_history_csv(csv_path="hk_full_history.csv"):
+# ========== 本地 CSV 加载（适配 Mark_Six.csv） ==========
+def load_local_history_csv(csv_path="Mark_Six.csv"):
+    """
+    读取本地 CSV 文件，自动识别列名（期數、日期、中獎號碼 1~6、特別號碼）
+    返回记录列表，按开奖日期降序（最新在前）
+    """
     records = []
     if not Path(csv_path).exists():
+        print(f"⚠️ 本地 CSV 不存在: {csv_path}")
         return records
-    with open(csv_path, "r", encoding="utf-8") as f:
-        reader = csv.reader(f)
-        next(reader, None)
+
+    with open(csv_path, "r", encoding="utf-8-sig") as f:
+        reader = csv.DictReader(f)
+        if not reader.fieldnames:
+            return records
+
+        fieldnames = reader.fieldnames
+        # 识别列名
+        issue_col = next((c for c in fieldnames if "期" in c), None)
+        date_col = next((c for c in fieldnames if "日期" in c), None)
+        # 中獎號碼列: 可能是 "中獎號碼 1","中獎號碼 2"...
+        num_cols = []
+        for i in range(1,7):
+            cand = f"中獎號碼 {i}"
+            if cand in fieldnames:
+                num_cols.append(cand)
+            else:
+                # 兼容旧格式：直接用数字列名 "1","2",...
+                fallback = str(i)
+                if fallback in fieldnames:
+                    num_cols.append(fallback)
+        special_col = next((c for c in fieldnames if "特別" in c), None)
+
+        if not (issue_col and date_col and len(num_cols)==6 and special_col):
+            print("❌ CSV 列名不匹配，期望: 期數, 日期, 中獎號碼 1~6, 特別號碼")
+            return records
+
         for row in reader:
-            if len(row) < 9:
-                continue
             try:
+                numbers = []
+                for col in num_cols:
+                    val = row.get(col, "").strip()
+                    if val:
+                        numbers.append(int(val))
+                if len(numbers) != 6:
+                    continue
+                special = int(row.get(special_col, 0))
+                if special == 0:
+                    continue
+
+                issue = row[issue_col].strip()
+                draw_date = row[date_col].strip()
+
                 records.append({
-                    "issue_no": row[0].strip(),
-                    "draw_date": row[1].strip(),
-                    "numbers": [int(x) for x in row[2:8]],
-                    "special_number": int(row[8]),
+                    "issue_no": issue,
+                    "draw_date": draw_date,
+                    "numbers": numbers,
+                    "special_number": special,
                 })
-            except:
+            except Exception:
                 continue
-    print(f"从本地 CSV 加载到 {len(records)} 期历史数据")
+
+    # 按期数降序排列（最新在前）
+    records.sort(key=lambda x: x["issue_no"], reverse=True)
+    print(f"✅ 从本地 CSV 加载到 {len(records)} 期历史数据（已按降序排列）")
     return records
 
-# ========== API 数据获取（香港六合彩） ==========
+# ========== API 数据获取（备用） ==========
 def _parse_numbers_internal(value: str) -> List[int]:
     out = []
     for token in value.replace("，",",").split(","):
@@ -143,8 +187,22 @@ def _parse_hk_payload(payload: dict, limit: int) -> List[Dict]:
     print(f"从API获取到 {len(sorted_records)} 期，最新: {sorted_records[0]['issue_no'] if sorted_records else '无'}")
     return sorted_records
 
-def fetch_hk_records_merged(limit: int = 1200) -> List[Dict]:
-    all_records = load_local_history_csv()
+def fetch_hk_records_merged(limit: int = None, prefer_local: bool = True) -> List[Dict]:
+    """
+    获取历史记录，默认 prefer_local=True 只使用本地 CSV（推荐）
+    若 prefer_local=False，则尝试 API 并与本地合并（备用）
+    """
+    all_records = load_local_history_csv("Mark_Six.csv")
+    if prefer_local:
+        if limit is not None and limit > 0:
+            all_records = all_records[:limit]
+        else:
+            # 若 limit=None 则返回全部
+            pass
+        print(f"📀 使用本地数据，共 {len(all_records)} 期")
+        return all_records
+
+    # 若不 prefer_local，则尝试 API 补充（极少使用）
     try:
         online = fetch_hk_records(limit=600)
         existing = {r["issue_no"] for r in all_records}
@@ -154,10 +212,9 @@ def fetch_hk_records_merged(limit: int = 1200) -> List[Dict]:
     except Exception as e:
         print(f"在线获取失败: {e}")
     all_records.sort(key=lambda x: x["issue_no"], reverse=True)
-    if limit>0: all_records = all_records[:limit]
-    print(f"合并后共 {len(all_records)} 期，最新: {all_records[0]['issue_no'] if all_records else '无'}")
+    if limit and limit>0:
+        all_records = all_records[:limit]
     return all_records
-
 
 # ========== 参数管理与 Git 推送 ==========
 def load_params(file_name: str) -> dict:
