@@ -36,7 +36,6 @@ def main():
         print(f"主推: {top5[0]:02d}")
         print(f"防守(5码): {' '.join(f'{n:02d}' for n in top5[1:5])}")
         print(f"\n【特五肖 (正码频率)】: {'、'.join(zodiac5)}")
-        print("\n注: XGBoost特别号模型基于2548期训练，验证准确率约12-15%。")
 
 if __name__ == "__main__":
     main()
