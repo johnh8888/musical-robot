@@ -72,7 +72,7 @@ def backtest_zodiac_stats(rows, lookback):
         pred_three_raw = [z for z, _ in votes_three.most_common(3)]
 
         # ---------- 2. 一生肖连空保护（连空≥2期则强行追最冷）----------
-        if miss_single >= 2:
+        if miss_single >=1:
             omission = _zodiac_omission_map(train)
             if omission:
                 coldest = max(omission, key=omission.get)
@@ -122,7 +122,7 @@ def backtest_zodiac_stats(rows, lookback):
 
         # 三生肖（优化后：只要命中至少1个就算中，显著降低连空）
         hit_cnt = sum(1 for z in pred_three if z in win_z)
-        if hit_cnt >= 1:
+        if hit_cnt >= 2:
             hits_three += 1
             miss_three = 0
         else:
