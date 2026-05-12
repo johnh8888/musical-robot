@@ -1,6 +1,5 @@
 name: 香港六合彩预测 (机器学习版)
 
-
 on:
   schedule:
     - cron: '30 13 * * *'
@@ -28,11 +27,11 @@ jobs:
 
       - name: 训练机器学习模型（若模型文件不存在）
         run: |
-          if [ ! -f "zodiac_ranker.txt" ] || [ ! -f "special_xgb.json" ]; then
+          if [ ! -f "zodiac_ranker.txt" ] || [ ! -f "special_xgb.pkl" ]; then
             python train_ml_models.py
             git config user.name "github-actions[bot]"
             git config user.email "github-actions[bot]@users.noreply.github.com"
-            git add zodiac_ranker.txt special_xgb.json
+            git add zodiac_ranker.txt special_xgb.pkl
             git commit -m "Auto-train ML models (LightGBM + XGBoost)" || echo "No changes"
             git push || echo "Push failed"
           else
