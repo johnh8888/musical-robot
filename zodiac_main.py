@@ -11,7 +11,7 @@ from strategies_zodiac import (
 )
 
 OPTIMAL_WINDOWS = [8, 10, 12, 18, 20, 30]
-XGB_WEIGHT = 0.0
+XGB_WEIGHT = 0.3
 
 def get_history_rows_as_list(limit=None):
     records = fetch_hk_records_merged(limit=limit, prefer_local=True)
