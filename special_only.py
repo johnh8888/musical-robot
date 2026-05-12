@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# special_only.py - 特别号预测（使用本地完整历史，频率模型）
+# special_only.py - 特别号预测（基于频率）
 
 import argparse
 import pickle
@@ -10,7 +10,6 @@ from common import fetch_hk_records_merged
 MODEL_PATH = "special_model.pkl"
 
 def train_special_model():
-    """基于本地全部历史数据训练特别号频率模型"""
     records = fetch_hk_records_merged(limit=None, prefer_local=True)
     specials = [r["special_number"] for r in records]
     counter = Counter(specials)
@@ -22,7 +21,6 @@ def train_special_model():
     return probs
 
 def predict_special(top_n=5):
-    """预测下一期特别号（返回 top_n 个最可能号码）"""
     if not Path(MODEL_PATH).exists():
         probs = train_special_model()
     else:
@@ -32,7 +30,6 @@ def predict_special(top_n=5):
     return [num for num, _ in sorted_nums[:top_n]]
 
 def backtest_special(rows, lookback=100):
-    """回测特别号预测命中率（使用历史频率作为预测）"""
     rows_rev = list(reversed(rows))
     total = min(lookback, len(rows_rev) - 20)
     hits = 0
@@ -48,8 +45,8 @@ def backtest_special(rows, lookback=100):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--train", action="store_true", help="训练频率模型")
-    parser.add_argument("--show", action="store_true", help="显示预测结果和回测")
+    parser.add_argument("--train", action="store_true")
+    parser.add_argument("--show", action="store_true")
     args = parser.parse_args()
 
     if args.train:
