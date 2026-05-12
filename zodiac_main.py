@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# zodiac_main.py - 一二三生肖最终版（已修复变量未定义错误）
+# zodiac_main.py - 一二三生肖最终版（使用完整本地历史）
 
 import argparse
 import json
@@ -10,11 +10,15 @@ from strategies_zodiac import (
     _zodiac_omission_map
 )
 
+# 窗口列表可配置，建议后续用 Optuna 重新优化，这里沿用原值
 OPTIMAL_WINDOWS = [8, 10, 12, 18, 20, 30]
-XGB_WEIGHT = 0.0
+XGB_WEIGHT = 0.0   # 暂时关闭 XGBoost 权重，若需要可改为 0.3 并确保模型存在
 
-def get_history_rows_as_list(limit=1000):
-    records = fetch_hk_records_merged(limit=limit)
+def get_history_rows_as_list(limit=None):
+    """
+    获取历史记录，若 limit=None 则返回全部本地数据（推荐）
+    """
+    records = fetch_hk_records_merged(limit=limit, prefer_local=True)
     rows = []
     for r in records:
         rows.append({
@@ -26,6 +30,7 @@ def get_history_rows_as_list(limit=1000):
     return rows
 
 def backtest_zodiac_stats(rows, lookback):
+    """回测最近 lookback 期，返回命中率和最大连空"""
     rows_rev = list(reversed(rows))
     total = min(lookback, len(rows_rev) - 20)
     if total <= 0:
@@ -94,7 +99,7 @@ def backtest_zodiac_stats(rows, lookback):
             miss_two += 1
             max_miss_two = max(max_miss_two, miss_two)
 
-        # 三生肖统计
+        # 三生肖统计（至少中两个算命中）
         hit_cnt = sum(1 for z in pred_three if z in win_z)
         if hit_cnt >= 2:
             hits_three += 1
@@ -116,10 +121,13 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--show", action="store_true")
     args = parser.parse_args()
-    rows = get_history_rows_as_list(limit=1000)
+
+    # 获取全部历史数据（1800+期）
+    rows = get_history_rows_as_list(limit=None)
     if not rows:
-        print("数据获取失败")
+        print("数据获取失败，请确保 Mark_Six.csv 存在且格式正确")
         return
+
     if args.show:
         print(f"使用窗口 {OPTIMAL_WINDOWS}, XGB权重 {XGB_WEIGHT}")
         votes_single = Counter()
@@ -139,11 +147,20 @@ def main():
         print(f"一生肖: {single}")
         print(f"二生肖: {'、'.join(two)}")
         print(f"三生肖: {'、'.join(three)}")
+
+        # 回测最近10期（快速验证）
         stats10 = backtest_zodiac_stats(rows, 10)
         if stats10:
             print(f"\n近10期回测：一生肖 {stats10['single_hit_rate']:.1%} 连空{stats10['single_max_miss']}")
             print(f"二生肖 {stats10['two_hit_rate']:.1%} 连空{stats10['two_max_miss']}")
             print(f"三生肖 {stats10['three_hit_rate']:.1%} 连空{stats10['three_max_miss']}")
+
+        # 回测最近100期（更稳定评估）
+        stats100 = backtest_zodiac_stats(rows, 100)
+        if stats100:
+            print(f"\n近100期回测：一生肖 {stats100['single_hit_rate']:.1%} 连空{stats100['single_max_miss']}")
+            print(f"二生肖 {stats100['two_hit_rate']:.1%} 连空{stats100['two_max_miss']}")
+            print(f"三生肖 {stats100['three_hit_rate']:.1%} 连空{stats100['three_max_miss']}")
 
 if __name__ == "__main__":
     main()
