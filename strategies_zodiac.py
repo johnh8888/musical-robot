@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# strategies_zodiac.py - 增强规则策略（包含多特征评分）
+# strategies_zodiac.py - 增强规则策略（修复版）
 
 import json
 from collections import Counter
@@ -36,6 +36,7 @@ def _compute_zodiac_score_advanced(rows, recent_window=20, special_boost=2.0,
                                    weight_omission=0.3, weight_pair=0.5, weight_weekday=0.1):
     """
     增强评分：正码频率 + 特别号加权 + 遗漏加权 + 对肖奖励 + 星期几倾向
+    rows: list of dict with keys "numbers_json", "special_number", "draw_date"
     """
     scores = {}
     # 预计算星期几的生肖分布（基于所有历史，静态）
@@ -45,10 +46,10 @@ def _compute_zodiac_score_advanced(rows, recent_window=20, special_boost=2.0,
             wd = datetime.strptime(r["draw_date"], "%Y-%m-%d").weekday()
         except:
             continue
-        for n in r["numbers"]:
+        for n in _row_numbers(r):
             z = get_zodiac_by_number(n)
             weekday_zodiac_count[wd][z] += 1
-        z_sp = get_zodiac_by_number(r["special_number"])
+        z_sp = get_zodiac_by_number(_row_special(r))
         weekday_zodiac_count[wd][z_sp] += 1
     # 当前星期几
     today_wd = -1
@@ -74,7 +75,7 @@ def _compute_zodiac_score_advanced(rows, recent_window=20, special_boost=2.0,
         
         # 遗漏分（值越大越冷，给予正向分数）
         omission = _zodiac_omission_map(rows).get(z, 0)
-        omission_score = omission / recent_window
+        omission_score = omission / (recent_window + 1)
         
         # 对肖分：上期特别号的对肖
         pair_bonus = 0
@@ -85,11 +86,11 @@ def _compute_zodiac_score_advanced(rows, recent_window=20, special_boost=2.0,
             if pair == z:
                 pair_bonus = weight_pair
         
-        # 星期几倾向分：该生肖在今天这个星期几的历史出现比例（归一化）
+        # 星期几倾向分
         weekday_bonus = 0
         if today_wd != -1 and weekday_zodiac_count[today_wd].total() > 0:
             prob = weekday_zodiac_count[today_wd].get(z, 0) / weekday_zodiac_count[today_wd].total()
-            weekday_bonus = prob * weight_weekday * 10  # 放大系数
+            weekday_bonus = prob * weight_weekday * 10
         
         scores[z] = base + special_bonus + weight_omission * omission_score + pair_bonus + weekday_bonus
     return scores
