@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# strategies_zodiac.py - 增强规则策略（修复版）
+# strategies_zodiac.py - 兼容两种数据格式
 
 import json
 from collections import Counter
@@ -7,10 +7,19 @@ from datetime import datetime
 from common import get_zodiac_by_number, ZODIAC_MAP, ZODIAC_PAIR
 
 def _row_numbers(row):
-    return json.loads(row["numbers_json"])
+    """兼容两种字段：优先使用 numbers_json，否则使用 numbers"""
+    if "numbers_json" in row:
+        return json.loads(row["numbers_json"])
+    elif "numbers" in row:
+        return row["numbers"]
+    else:
+        raise KeyError("row must contain 'numbers_json' or 'numbers'")
 
 def _row_special(row):
-    return row["special_number"]
+    if "special_number" in row:
+        return row["special_number"]
+    else:
+        raise KeyError("row must contain 'special_number'")
 
 def _zodiac_omission_map(rows):
     omission = {z: 0 for z in ZODIAC_MAP}
@@ -32,14 +41,10 @@ def _zodiac_omission_map(rows):
             omission[z] = len(rows)
     return omission
 
-def _compute_zodiac_score_advanced(rows, recent_window=20, special_boost=2.0, 
+def _compute_zodiac_score_advanced(rows, recent_window=20, special_boost=2.0,
                                    weight_omission=0.3, weight_pair=0.5, weight_weekday=0.1):
-    """
-    增强评分：正码频率 + 特别号加权 + 遗漏加权 + 对肖奖励 + 星期几倾向
-    rows: list of dict with keys "numbers_json", "special_number", "draw_date"
-    """
     scores = {}
-    # 预计算星期几的生肖分布（基于所有历史，静态）
+    # 星期几分布
     weekday_zodiac_count = {i: Counter() for i in range(7)}
     for r in rows:
         try:
@@ -51,7 +56,6 @@ def _compute_zodiac_score_advanced(rows, recent_window=20, special_boost=2.0,
             weekday_zodiac_count[wd][z] += 1
         z_sp = get_zodiac_by_number(_row_special(r))
         weekday_zodiac_count[wd][z_sp] += 1
-    # 当前星期几
     today_wd = -1
     if rows:
         try:
@@ -61,23 +65,17 @@ def _compute_zodiac_score_advanced(rows, recent_window=20, special_boost=2.0,
 
     for z in ZODIAC_MAP:
         nums = ZODIAC_MAP[z]
-        # 基础分：正码出现次数（近 recent_window 期）
         base = 0
         for r in rows[:recent_window]:
             for n in _row_numbers(r):
                 if n in nums:
                     base += 1
-        # 特别号加权分
         special_bonus = 0
         for r in rows[:recent_window]:
             if _row_special(r) in nums:
                 special_bonus += special_boost
-        
-        # 遗漏分（值越大越冷，给予正向分数）
         omission = _zodiac_omission_map(rows).get(z, 0)
         omission_score = omission / (recent_window + 1)
-        
-        # 对肖分：上期特别号的对肖
         pair_bonus = 0
         if rows:
             last_sp = _row_special(rows[0])
@@ -85,34 +83,29 @@ def _compute_zodiac_score_advanced(rows, recent_window=20, special_boost=2.0,
             pair = ZODIAC_PAIR.get(last_zod)
             if pair == z:
                 pair_bonus = weight_pair
-        
-        # 星期几倾向分
         weekday_bonus = 0
         if today_wd != -1 and weekday_zodiac_count[today_wd].total() > 0:
             prob = weekday_zodiac_count[today_wd].get(z, 0) / weekday_zodiac_count[today_wd].total()
             weekday_bonus = prob * weight_weekday * 10
-        
         scores[z] = base + special_bonus + weight_omission * omission_score + pair_bonus + weekday_bonus
     return scores
 
+# 以下预测函数保持不变，但使用 _row_numbers etc.
 def predict_strong_single(rows, params, xgb_weight=0.0, xgb_model=None):
     window = params.get("single_recent_window", 20)
     boost = params.get("single_special_boost", 2.0)
-    scores = _compute_zodiac_score_advanced(rows, recent_window=window, special_boost=boost,
-                                            weight_omission=0.3, weight_pair=0.5, weight_weekday=0.1)
+    scores = _compute_zodiac_score_advanced(rows, recent_window=window, special_boost=boost)
     return max(scores, key=scores.get)
 
 def predict_strong_two(rows, params, xgb_weight=0.0, xgb_model=None):
     window = params.get("two_recent_window", 20)
     boost = params.get("two_special_boost", 2.0)
-    scores = _compute_zodiac_score_advanced(rows, recent_window=window, special_boost=boost,
-                                            weight_omission=0.3, weight_pair=0.5, weight_weekday=0.1)
+    scores = _compute_zodiac_score_advanced(rows, recent_window=window, special_boost=boost)
     sorted_z = sorted(scores.items(), key=lambda x: -x[1])
     return [z for z, _ in sorted_z[:2]]
 
 def predict_strong_three_with_window(rows, window, xgb_weight=0.0, xgb_model=None):
-    scores = _compute_zodiac_score_advanced(rows, recent_window=window, special_boost=2.0,
-                                            weight_omission=0.3, weight_pair=0.5, weight_weekday=0.1)
+    scores = _compute_zodiac_score_advanced(rows, recent_window=window, special_boost=2.0)
     sorted_z = sorted(scores.items(), key=lambda x: -x[1])
     return [z for z, _ in sorted_z[:3]]
 
