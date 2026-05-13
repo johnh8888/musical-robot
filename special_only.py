@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# special_only.py - 香港特五肖预测（在线120期 + 增强策略）
+# special_only.py - 香港特五肖预测（趋势感知+连空压缩版）
 import argparse, gzip, json, re, time, urllib.request
 from collections import Counter
 from itertools import combinations
@@ -30,7 +30,7 @@ def next_issue(issue_no: str) -> str:
     except:
         return issue_no
 
-# ===================== 在线获取香港数据 =====================
+# ===================== 在线获取香港六合彩 =====================
 def fetch_hk_online(limit=120):
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
@@ -42,7 +42,7 @@ def fetch_hk_online(limit=120):
         try:
             with urllib.request.urlopen(req, timeout=15) as resp:
                 raw = resp.read()
-                if "gzip" in resp.headers.get("Content-Encoding", "").lower():
+                if "gzip" in resp.headers.get("Content-Encoding","").lower():
                     raw = gzip.decompress(raw)
                 data = json.loads(raw.decode("utf-8"))
                 records = []
@@ -86,9 +86,10 @@ def _parse_nums(value):
         except: pass
     return out
 
-# ===================== 增强参数 =====================
+# ===================== 参数配置 =====================
 CANDIDATE_WINDOWS = [4,6,8,10,12,15,18,20,24,30,36,42,48,54,60]
 OPTIMAL_WINDOWS = [4,6,8,10,12]
+
 SPECIAL_WEIGHT = 1.0
 COLD_BASE = 0.8
 COLD_STEP = 0.3
@@ -99,9 +100,14 @@ BASE_NORMAL_WEIGHT = 0.5
 SIGNAL_THRESHOLD = 0.6
 RECOMMEND_COUNT = 5
 
+# 趋势感知参数
+TREND_LOOKBACK = 12
+HOT_OVERHEAT_THRESHOLD = 0.7
+
 def w_weight(w, base=84):
     return round(base/w, 2)
 
+# ===================== 辅助函数 =====================
 def omission_map(rows):
     if not rows: return {z:0 for z in ZODIAC_LIST}
     om = {z:0 for z in ZODIAC_LIST}
@@ -127,32 +133,68 @@ def normal_signal(history):
         return True, max(0.1, min(0.6, w))
     return False, 0.0
 
+def trend_factor(history):
+    """返回 (热号信任乘数, 冷号加票乘数)"""
+    if len(history) < TREND_LOOKBACK+1:
+        return 1.0, 1.0
+    recent = history[-TREND_LOOKBACK:]
+    hot_hit = 0
+    total = len(recent)-1
+    if total <= 0: return 1.0, 1.0
+    for i in range(total):
+        prev = recent[i]
+        cur_sp = get_zodiac(recent[i+1]["special_number"])
+        # 估算上期热号：最近30期特码频率前5
+        sub = history[:history.index(prev)+1][-30:]
+        cnt = Counter()
+        for r in sub:
+            cnt[get_zodiac(r["special_number"])] += 1
+        top5 = [z for z,_ in cnt.most_common(5)]
+        if cur_sp in top5:
+            hot_hit += 1
+    ratio = hot_hit/total
+    if ratio > HOT_OVERHEAT_THRESHOLD:
+        return 0.9, 1.5      # 过热 → 降热号信任，升冷号
+    elif ratio < 0.3:
+        return 1.0, 0.8      # 过冷 → 正常热号，降冷号
+    return 1.0, 1.0
+
 def dynamic_cold_bonus(om_val):
     if om_val <= 0: return 0.0
     return min(COLD_BASE + (om_val//10)*COLD_STEP, COLD_MAX)
 
+# ===================== 推荐核心 =====================
 def recommend(history, windows, force_cold=False):
     if not history: return ZODIAC_LIST[:RECOMMEND_COUNT]
+
     use_normal, normal_w = normal_signal(history)
+    hot_boost, cold_mult = trend_factor(history)
+
     om = omission_map(history)
     sorted_cold = sorted(om, key=om.get, reverse=True)
     votes = Counter()
+
     for w in windows:
         recent = history[-w:] if len(history)>=w else history
         cnt = Counter()
         for r in recent:
             spz = get_zodiac(r["special_number"])
-            cnt[spz] += SPECIAL_WEIGHT
+            cnt[spz] += SPECIAL_WEIGHT * hot_boost
             if use_normal:
                 for n in r["numbers"]:
                     cnt[get_zodiac(n)] += normal_w
         for z,_ in cnt.most_common(RECOMMEND_COUNT):
             votes[z] += w_weight(w)
-    # 动态冷号加票
+
+    # 动态冷号加票（乘以趋势乘数）
     for z in sorted_cold:
-        bonus = dynamic_cold_bonus(om[z])
-        if bonus > 0: votes[z] += bonus
+        base_bonus = dynamic_cold_bonus(om[z])
+        if base_bonus > 0:
+            votes[z] += base_bonus * cold_mult
+
     preds = [z for z,_ in votes.most_common(RECOMMEND_COUNT)]
+
+    # 连空保护
     if force_cold and len(preds)>=RECOMMEND_COUNT:
         keep = preds[:RECOMMEND_COUNT-2]
         new_cold = [z for z in sorted_cold[:2] if z not in keep]
@@ -163,6 +205,7 @@ def recommend(history, windows, force_cold=False):
             else: preds.append("马")
     return preds[:RECOMMEND_COUNT]
 
+# ===================== 回测与优化 =====================
 def backtest(rows, lookback, windows):
     rev = list(reversed(rows))
     total = min(lookback, len(rev)-20)
@@ -190,6 +233,7 @@ def optimize_windows(rows, look=100):
             best_combo = list(combo)
     return best_combo if best_combo else [4,6,8,10,12]
 
+# ===================== 主程序 =====================
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--show", action="store_true")
@@ -209,7 +253,8 @@ def main():
         pred = next_issue(latest)
         print(f"预测期号: {pred}")
         use_n, nw = normal_signal(rows)
-        print(f"正码增强: {'开启' if use_n else '关闭'} (权重 {nw:.2f})")
+        hot_b, cold_m = trend_factor(rows)
+        print(f"正码增强: {'开启' if use_n else '关闭'} | 热号乘数:{hot_b:.2f} 冷号乘数:{cold_m:.2f}")
         preds = recommend(rows, OPTIMAL_WINDOWS, force_cold=False)
         print(f"\n【特五肖推荐】: {'、'.join(preds)}")
         hr10, miss10 = backtest(rows, 10, OPTIMAL_WINDOWS)
