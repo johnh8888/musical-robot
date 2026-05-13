@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# zodiac_main.py - 香港一二三生肖预测（纯在线120期版）
+# zodiac_main.py - 香港一二三生肖预测（三肖连空优化版）
 import argparse, gzip, json, re, time, urllib.request
 from collections import Counter
 from itertools import combinations
@@ -15,7 +15,6 @@ ZODIAC_MAP = {
 ZODIAC_LIST = list(ZODIAC_MAP.keys())
 API_URL = "https://marksix6.net/index.php?api=1"
 
-# ===================== 工具函数 =====================
 def get_zodiac(n):
     for z, ns in ZODIAC_MAP.items():
         if n in ns: return z
@@ -32,7 +31,7 @@ def next_issue(issue_no: str) -> str:
     except:
         return issue_no
 
-# ===================== 在线数据获取（只取香港六合彩） =====================
+# ===================== 在线获取香港六合彩（120期） =====================
 def fetch_hk_online(limit=120):
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
@@ -44,10 +43,9 @@ def fetch_hk_online(limit=120):
         try:
             with urllib.request.urlopen(req, timeout=15) as resp:
                 raw = resp.read()
-                if "gzip" in resp.headers.get("Content-Encoding", "").lower():
+                if "gzip" in resp.headers.get("Content-Encoding","").lower():
                     raw = gzip.decompress(raw)
                 data = json.loads(raw.decode("utf-8"))
-                # 遍历 lottery_data 找香港六合彩
                 records = []
                 for item in data.get("lottery_data", []):
                     name = item.get("name", "")
@@ -70,14 +68,12 @@ def fetch_hk_online(limit=120):
                                 "special_number": nums[6],
                             })
                         break
-                # 去重排序
                 dedup = {r["issue_no"]: r for r in records}
                 sorted_rec = sorted(dedup.values(), key=lambda x: x["issue_no"], reverse=True)
                 print(f"📡 在线获取到 {len(sorted_rec)} 期香港六合彩数据")
                 return sorted_rec[:limit]
         except Exception as e:
-            if attempt == 3:
-                print(f"❌ 在线获取失败: {e}")
+            if attempt == 3: print(f"❌ 在线获取失败: {e}")
             time.sleep(2 ** attempt)
     return []
 
@@ -93,20 +89,23 @@ def _parse_nums(value):
     return out
 
 # ===================== 策略参数 =====================
-CANDIDATE_SINGLE = [4,6,8,10,12,15,18,20,24,30]  # 去掉极短窗口
-CANDIDATE_TWO    = [4,6,8,10,12,15,18,20,24,30,36,42]
-CANDIDATE_THREE  = [4,6,8,10,12,15,18,20,24,30,36,42,48]
+CANDIDATE_SINGLE = [4,6,8,10,12,15,18,20,24,30]   # 一肖（不变）
+CANDIDATE_TWO    = [4,6,8,10,12,15,18,20,24,30,36,42] # 二肖（不变）
+CANDIDATE_THREE  = [4,6,8,10,12,15,18,20,24,30]   # 三肖（移除长窗口）
+
 OPTIMAL_SINGLE = [6,10,12,18]
 OPTIMAL_TWO    = [4,6,8,10,12]
-OPTIMAL_THREE  = [8,10,12,15,30]
+OPTIMAL_THREE  = [8,10,12,15]
+
 SINGLE_BOOST = 3.2
 TWO_BOOST    = 3.0
-MISS_PROTECT = 1
+MISS_PROTECT = 1           # 连空保护阈值
+THREE_MISS_PENALTY = 0.2   # 三肖优化惩罚系数（提高）
 
 def w_weight(w, base=42):
     return round(base/w, 2)
 
-# ===================== 策略核心 =====================
+# ===================== 策略核心函数 =====================
 def omission_map(rows):
     if not rows: return {z:0 for z in ZODIAC_LIST}
     om = {z:0 for z in ZODIAC_LIST}
@@ -151,7 +150,7 @@ def predict_all(history, w_s, w_t, w_th):
     two = [z for z,_ in vt.most_common(2)]
     vth = Counter()
     for w in w_th:
-        for z in pred_three(history, w): vth[z] += w_weight(w, 48)
+        for z in pred_three(history, w): vth[z] += w_weight(w, 30)
     three = [z for z,_ in vth.most_common(3)]
     return single, two, three
 
@@ -186,7 +185,7 @@ def backtest(rows, lookback, w_s, w_t, w_th):
         # 三肖
         vth = Counter()
         for w in w_th:
-            for z in pred_three(train,w): vth[z] += w_weight(w, 48)
+            for z in pred_three(train,w): vth[z] += w_weight(w, 30)
         pth = [z for z,_ in vth.most_common(3)]
         if miss_th >= MISS_PROTECT and om:
             cold2 = sorted(om, key=om.get, reverse=True)[:2]
@@ -208,6 +207,7 @@ def backtest(rows, lookback, w_s, w_t, w_th):
         "th_hit": hit_th/total, "th_miss": max_th,
     }
 
+# ===================== 窗口优化 =====================
 def opt_single(rows, look=100):
     best, score = [6,10,12,18], -1
     for combo in combinations(CANDIDATE_SINGLE, 4):
@@ -227,11 +227,12 @@ def opt_two(rows, look=100):
     return best
 
 def opt_three(rows, look=100):
-    best, score = [8,10,12,15,30], -1
-    for combo in combinations(CANDIDATE_THREE, 5):
+    best, score = [8,10,12,15], -1
+    # 三肖使用4窗口组合，惩罚系数提高
+    for combo in combinations(CANDIDATE_THREE, 4):
         st = backtest(rows, look, OPTIMAL_SINGLE, OPTIMAL_TWO, list(combo))
         if st is None: continue
-        s = st["th_hit"] - st["th_miss"]*0.1
+        s = st["th_hit"] - st["th_miss"]*THREE_MISS_PENALTY
         if s>score: score=s; best=list(combo)
     return best
 
