@@ -1,12 +1,10 @@
-name: 香港六合彩预测 (纯规则版)
+name: 自动搜索最佳窗口组合
 
 on:
-  schedule:
-    - cron: '30 13 * * *'
-  workflow_dispatch:
+  workflow_dispatch:   # 手动触发
 
 jobs:
-  predict:
+  optimize:
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -24,15 +22,26 @@ jobs:
           pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: 一二三生肖预测
-        run: python zodiac_main.py --show
+      - name: 运行搜索脚本
+        run: python search_best_windows.py > windows_result.txt
 
-      - name: 特五肖预测
-        run: python special_only.py --show
+      - name: 提取最佳窗口
+        id: extract
+        run: |
+          BEST_WINDOWS=$(grep "建议将" windows_result.txt | sed -n 's/.*= //p' | tr -d '[]')
+          echo "best_windows=$BEST_WINDOWS" >> $GITHUB_OUTPUT
+
+      - name: 修改 zodiac_main.py
+        run: |
+          sed -i "s/OPTIMAL_WINDOWS = .*/OPTIMAL_WINDOWS = [${{ steps.extract.outputs.best_windows }}]/" zodiac_main.py
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add zodiac_main.py
+          git commit -m "Auto-update best windows from search" || echo "No changes"
+          git push || echo "Push failed"
 
       - name: 上传结果
         uses: actions/upload-artifact@v4
         with:
-          name: prediction-logs
-          path: |
-            *.txt
+          name: optimization-log
+          path: windows_result.txt
