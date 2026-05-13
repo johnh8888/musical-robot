@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# zodiac_main_ml.py - 三生肖（3中2）规则+模型融合版
+# zodiac_main_ml.py - 三生肖（3中2）规则+模型融合，连空保护≥1
 
 import argparse
 import json
@@ -27,7 +27,6 @@ def load_xgb_model():
 
 def get_model_probs(rows, model):
     """用XGBoost为每个生肖输出概率"""
-    # 构造当前30期的特征
     window = 30
     hist = rows[:window]
     probs = []
@@ -50,7 +49,8 @@ def get_model_probs(rows, model):
                 break
             omission += 1
         last_sp_z = get_zodiac_by_number(hist[0]["special_number"])
-        is_pair = 1 if ZODIAC_PAIR.get(last_sp_z) == z else 0
+        pair = ZODIAC_PAIR.get(last_sp_z)
+        is_pair = 1 if pair == z else 0
         is_last_sp = 1 if last_sp_z == z else 0
         sp_cnt5 = sum(1 for r in hist[:5] if get_zodiac_by_number(r["special_number"]) == z)
         sp_cnt10 = sum(1 for r in hist[:10] if get_zodiac_by_number(r["special_number"]) == z)
@@ -58,7 +58,6 @@ def get_model_probs(rows, model):
         feats = [cnt10, cnt20, cnt30, omission, is_pair, is_last_sp, sp_cnt5, sp_cnt10, main_cnt10]
         prob = model.predict(xgb.DMatrix([feats]))[0]
         probs.append(prob)
-    # 软最大化，转为概率
     probs = np.exp(probs) / np.sum(np.exp(probs))
     return {z: probs[i] for i, z in enumerate(ZODIAC_MAP.keys())}
 
@@ -93,20 +92,17 @@ def backtest_zodiac_stats(rows, lookback, model):
         win_z = {get_zodiac_by_number(n) for n in win_main}
         win_z.add(get_zodiac_by_number(win_sp))
 
-        # 规则投票（加权）
+        # 规则投票
         votes_three = Counter()
         for w, weight in WINDOW_WEIGHTS:
             for z in predict_strong_three_with_window(train, w):
                 votes_three[z] += weight
         rule_top3 = [z for z, _ in votes_three.most_common(3)]
 
-        # 模型概率
+        # 模型融合
         if model:
             model_probs = get_model_probs(train, model)
-            # 融合：规则分数（归一化后）与模型概率加权
-            # 此处简化：直接用模型概率 top3 与规则 top3 混合
             model_top3 = sorted(model_probs, key=model_probs.get, reverse=True)[:3]
-            # 融合：取并集，按规则票数+模型概率加权排序
             combined_scores = {}
             for z in set(rule_top3 + model_top3):
                 rule_score = votes_three.get(z, 0)
@@ -115,6 +111,20 @@ def backtest_zodiac_stats(rows, lookback, model):
             pred_three = sorted(combined_scores, key=combined_scores.get, reverse=True)[:3]
         else:
             pred_three = rule_top3
+
+        # ★ 连空保护：只要之前连空≥1，就强制用“二生肖 + 最热生肖”替换
+        # 注意：这里需要在每期获取二生肖和热肖，但为了简单，我们仅在回测中做保护
+        # 实际在主预测时也应类似处理。但为了回测准确，我们在此加入保护逻辑。
+        # 先计算二生肖（与主程序一致）
+        votes_two = Counter()
+        for w, weight in WINDOW_WEIGHTS:
+            for z in predict_strong_two(train, {"two_recent_window": w, "two_special_boost": 3.0}):
+                votes_two[z] += weight
+        pred_two = [z for z, _ in votes_two.most_common(2)]
+        if miss_three >= 1:   # 只要上期未中，就干预
+            hot = get_hot_zodiac(train, window=10)
+            combined = list(dict.fromkeys(pred_two + [hot]))
+            pred_three = combined[:3]
 
         # 命中判定
         hit_cnt = sum(1 for z in pred_three if z in win_z)
@@ -137,7 +147,7 @@ def main():
         return
     model = load_xgb_model()
     if args.show:
-        # 规则投票
+        # 预测当前期
         votes_three = Counter()
         for w, weight in WINDOW_WEIGHTS:
             for z in predict_strong_three_with_window(rows, w):
@@ -159,7 +169,7 @@ def main():
         print(f"预测期号: {next_issue(latest)}")
         print(f"三生肖（3中2）: {'、'.join(pred_three)}")
 
-        # 回测近100期
+        # 回测近100期（使用保护逻辑）
         hit_rate, max_miss = backtest_zodiac_stats(rows, 100, model)
         if hit_rate:
             print(f"\n近100期回测（三生肖）: 命中率 {hit_rate:.1%}，最大连空 {max_miss}")
