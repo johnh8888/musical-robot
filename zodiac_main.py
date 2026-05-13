@@ -55,13 +55,13 @@ def backtest_zodiac_stats(rows, lookback):
         votes_two = Counter()
         votes_three = Counter()
         for w, weight in WINDOW_WEIGHTS:
-            # 一生肖投票
+            # 一生肖
             z_single = predict_strong_single(train, {"single_recent_window": w, "single_special_boost": 3.2})
             votes_single[z_single] += weight
-            # 二生肖投票
+            # 二生肖
             for z in predict_strong_two(train, {"two_recent_window": w, "two_special_boost": 3.0}):
                 votes_two[z] += weight
-            # 三生肖投票
+            # 三生肖
             for z in predict_strong_three_with_window(train, w):
                 votes_three[z] += weight
 
@@ -86,7 +86,7 @@ def backtest_zodiac_stats(rows, lookback):
                 pred_two_raw[-1] = cold
         pred_two = pred_two_raw
 
-        # ★ 三生肖保护：连空≥2时，强制使用“二生肖 + 最热生肖”
+        # 三生肖保护：连空≥2时，强制使用“二生肖 + 最热生肖”
         if miss_three >= 2:
             hot = get_hot_zodiac(train, window=10)
             combined = list(dict.fromkeys(pred_two + [hot]))
@@ -94,7 +94,7 @@ def backtest_zodiac_stats(rows, lookback):
         else:
             pred_three = pred_three_raw[:3]
 
-        # 统计
+        # 统计一生肖
         if pred_single in win_z:
             hits_single += 1
             miss_single = 0
@@ -102,6 +102,7 @@ def backtest_zodiac_stats(rows, lookback):
             miss_single += 1
             max_miss_single = max(max_miss_single, miss_single)
 
+        # 统计二生肖
         if any(z in win_z for z in pred_two):
             hits_two += 1
             miss_two = 0
@@ -109,6 +110,7 @@ def backtest_zodiac_stats(rows, lookback):
             miss_two += 1
             max_miss_two = max(max_miss_two, miss_two)
 
+        # 统计三生肖（严格：必须命中2个）
         hit_cnt = sum(1 for z in pred_three if z in win_z)
         if hit_cnt >= 2:
             hits_three += 1
