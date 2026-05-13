@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# zodiac_main.py - 一生肖5窗口（8,10,12,20,30），二/三生肖4窗口（8,12,20,30）
+# zodiac_main.py - 最终版（窗口 [8,12,15,25,30]），三生肖严格3中2
 
 import argparse
 import json
@@ -10,10 +10,7 @@ from strategies_zodiac import (
     get_hot_zodiac, get_cold_zodiac
 )
 
-# 一生肖专用窗口（5个）
-SINGLE_WINDOWS = [8, 10, 12, 20, 30]
-# 二生肖和三生肖窗口（4个）
-MAIN_WINDOWS = [8, 12, 20, 30]
+OPTIMAL_WINDOWS = [8, 12, 15, 25, 30]   # 穷举搜索最佳组合
 
 def get_history_rows_as_list(limit=None):
     records = fetch_hk_records_merged(limit=limit, prefer_local=True)
@@ -52,20 +49,13 @@ def backtest_all_zodiac(rows, lookback):
         win_z = {get_zodiac_by_number(n) for n in win_main}
         win_z.add(get_zodiac_by_number(win_sp))
 
-        # 一生肖使用5窗口投票
         votes_single = Counter()
-        for w in SINGLE_WINDOWS:
-            votes_single[predict_strong_single(train, {"single_recent_window": w, "single_special_boost": 3.2})] += 1
-
-        # 二生肖使用4窗口投票
         votes_two = Counter()
-        for w in MAIN_WINDOWS:
+        votes_three = Counter()
+        for w in OPTIMAL_WINDOWS:
+            votes_single[predict_strong_single(train, {"single_recent_window": w, "single_special_boost": 3.2})] += 1
             for p in predict_strong_two(train, {"two_recent_window": w, "two_special_boost": 3.0}):
                 votes_two[p] += 1
-
-        # 三生肖使用4窗口投票
-        votes_three = Counter()
-        for w in MAIN_WINDOWS:
             for p in predict_strong_three_with_window(train, w):
                 votes_three[p] += 1
 
@@ -136,21 +126,15 @@ def main():
         print("数据获取失败")
         return
     if args.show:
-        # 当前预测：一生肖用5窗口，二/三生肖用4窗口
         votes_single = Counter()
-        for w in SINGLE_WINDOWS:
-            votes_single[predict_strong_single(rows, {"single_recent_window": w, "single_special_boost": 3.2})] += 1
-
         votes_two = Counter()
-        for w in MAIN_WINDOWS:
+        votes_three = Counter()
+        for w in OPTIMAL_WINDOWS:
+            votes_single[predict_strong_single(rows, {"single_recent_window": w, "single_special_boost": 3.2})] += 1
             for p in predict_strong_two(rows, {"two_recent_window": w, "two_special_boost": 3.0}):
                 votes_two[p] += 1
-
-        votes_three = Counter()
-        for w in MAIN_WINDOWS:
             for p in predict_strong_three_with_window(rows, w):
                 votes_three[p] += 1
-
         single = votes_single.most_common(1)[0][0]
         two = [z for z, _ in votes_two.most_common(2)]
         three = [z for z, _ in votes_three.most_common(3)]
