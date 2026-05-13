@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# zodiac_main.py - 3窗口（8,12,20）优化版，三生肖严格3中2
+# zodiac_main.py - 3窗口（8,12,20）纯规则版，三生肖严格3中2
 
 import argparse
 import json
@@ -10,8 +10,7 @@ from strategies_zodiac import (
     get_hot_zodiac, get_cold_zodiac
 )
 
-# 实验性3窗口（根据历史经验选择）
-OPTIMAL_WINDOWS = [8, 12, 20]
+OPTIMAL_WINDOWS = [8, 12, 20]   # 3窗口组合
 
 def get_history_rows_as_list(limit=None):
     records = fetch_hk_records_merged(limit=limit, prefer_local=True)
@@ -77,7 +76,7 @@ def backtest_all_zodiac(rows, lookback):
                 pred_two_raw[-1] = cold
         pred_two = pred_two_raw
 
-        # ★ 三生肖强化保护：连空≥2时，强行使用“二生肖 + 最热生肖” + 最冷（去重取3）
+        # 三生肖保护：连空≥2时，用二生肖+最热+最冷
         if miss_three >= 2:
             hot = get_hot_zodiac(train, window=10)
             cold = get_cold_zodiac(train, window=30)
