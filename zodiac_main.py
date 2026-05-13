@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# zodiac_main.py - 一二三生肖完整版（三生肖3中2，强化保护）
+# zodiac_main.py - 4窗口（8,12,20,30）优化版，三生肖严格3中2
 
 import argparse
 import json
@@ -10,7 +10,8 @@ from strategies_zodiac import (
     get_hot_zodiac, get_cold_zodiac
 )
 
-OPTIMAL_WINDOWS = [8, 10, 12, 18, 20, 30]
+# 最佳4窗口（经经验验证）
+OPTIMAL_WINDOWS = [8, 12, 20, 30]
 
 def get_history_rows_as_list(limit=None):
     records = fetch_hk_records_merged(limit=limit, prefer_local=True)
@@ -49,7 +50,6 @@ def backtest_all_zodiac(rows, lookback):
         win_z = {get_zodiac_by_number(n) for n in win_main}
         win_z.add(get_zodiac_by_number(win_sp))
 
-        # 多窗口投票
         votes_single = Counter()
         votes_two = Counter()
         votes_three = Counter()
@@ -64,28 +64,30 @@ def backtest_all_zodiac(rows, lookback):
         pred_two_raw = [z for z, _ in votes_two.most_common(2)]
         pred_three_raw = [z for z, _ in votes_three.most_common(3)]
 
-        # 一生肖保护（连空≥3追热）
+        # 一生肖保护
         if miss_single >= 3:
             pred_single = get_hot_zodiac(train, window=10)
         else:
             pred_single = pred_single_raw
 
-        # 二生肖保护（连空≥2补入最冷）
+        # 二生肖保护
         if miss_two >= 2:
             cold = get_cold_zodiac(train, window=30)
             if cold not in pred_two_raw:
                 pred_two_raw[-1] = cold
         pred_two = pred_two_raw
 
-        # ★ 三生肖强化保护：只要连空≥2，就强制使用“二生肖 + 最热生肖”组合
+        # ★ 三生肖强化保护：只要连空≥2，就强行使用“二生肖 + 最热生肖” + 当前最冷（补充）
         if miss_three >= 2:
             hot = get_hot_zodiac(train, window=10)
-            combined = list(dict.fromkeys(pred_two + [hot]))
+            cold = get_cold_zodiac(train, window=30)
+            # 合并二生肖、热肖、冷肖，去重取前3
+            combined = list(dict.fromkeys(pred_two + [hot, cold]))
             pred_three = combined[:3]
         else:
             pred_three = pred_three_raw[:3]
 
-        # 统计一生肖
+        # 统计
         if pred_single in win_z:
             hits_single += 1
             miss_single = 0
@@ -93,7 +95,6 @@ def backtest_all_zodiac(rows, lookback):
             miss_single += 1
             max_miss_single = max(max_miss_single, miss_single)
 
-        # 统计二生肖
         if any(z in win_z for z in pred_two):
             hits_two += 1
             miss_two = 0
@@ -101,7 +102,6 @@ def backtest_all_zodiac(rows, lookback):
             miss_two += 1
             max_miss_two = max(max_miss_two, miss_two)
 
-        # 统计三生肖（严格中2个）
         hit_cnt = sum(1 for z in pred_three if z in win_z)
         if hit_cnt >= 2:
             hits_three += 1
@@ -128,7 +128,6 @@ def main():
         print("数据获取失败")
         return
     if args.show:
-        # 当前预测
         votes_single = Counter()
         votes_two = Counter()
         votes_three = Counter()
@@ -147,7 +146,6 @@ def main():
         print(f"二生肖: {'、'.join(two)}")
         print(f"三生肖: {'、'.join(three)}")
 
-        # 回测
         stats10 = backtest_all_zodiac(rows, 10)
         if stats10:
             print(f"\n近10期回测：一生肖 {stats10['single_hit_rate']:.1%} 连空{stats10['single_max_miss']}")
