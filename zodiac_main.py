@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
-# zodiac_main.py - 最终升级版（三肖预测4个，需中2个）
+# zodiac_main.py - 三生肖严格3中2，加权投票+提前保护
 
 import argparse
 import json
 from collections import Counter
 from common import fetch_hk_records_merged, get_zodiac_by_number, next_issue
 from strategies_zodiac import (
-    predict_strong_single, predict_strong_two, predict_strong_four,
-    get_hot_zodiac, get_cold_zodiac
+    predict_strong_single, predict_strong_two, predict_strong_three_with_window,
+    get_hot_zodiac, get_cold_zodiac, get_trend_zodiac
 )
 
-OPTIMAL_WINDOWS = [8, 10, 12, 18, 20, 30]
+# 窗口及对应权重（近期窗口权重大）
+WINDOW_WEIGHTS = [(8, 1.0), (10, 0.9), (12, 0.8), (18, 0.6), (20, 0.5), (30, 0.4)]
 
 def get_history_rows_as_list(limit=None):
     records = fetch_hk_records_merged(limit=limit, prefer_local=True)
@@ -49,19 +50,28 @@ def backtest_zodiac_stats(rows, lookback):
         win_z = {get_zodiac_by_number(n) for n in win_main}
         win_z.add(get_zodiac_by_number(win_sp))
 
+        # 多窗口加权投票
         votes_single = Counter()
         votes_two = Counter()
-        votes_four = Counter()
-        for w in OPTIMAL_WINDOWS:
-            votes_single[predict_strong_single(train, {"single_recent_window": w, "single_special_boost": 3.2})] += 1
-            for p in predict_strong_two(train, {"two_recent_window": w, "two_special_boost": 3.0}):
-                votes_two[p] += 1
-            for p in predict_strong_four(train, w):
-                votes_four[p] += 1
+        votes_three = Counter()
+        for w, weight in WINDOW_WEIGHTS:
+            # 一生肖投票
+            z_single = predict_strong_single(train, {"single_recent_window": w, "single_special_boost": 3.2})
+            votes_single[z_single] += weight
+            # 二生肖投票
+            for z in predict_strong_two(train, {"two_recent_window": w, "two_special_boost": 3.0}):
+                votes_two[z] += weight
+            # 三生肖投票
+            for z in predict_strong_three_with_window(train, w):
+                votes_three[z] += weight
+
+        # 特别号趋势规则（额外一票，权重0.5）
+        trend_zod = get_trend_zodiac(train, window=5)
+        votes_three[trend_zod] += 0.5
 
         pred_single_raw = votes_single.most_common(1)[0][0]
         pred_two_raw = [z for z, _ in votes_two.most_common(2)]
-        pred_four_raw = [z for z, _ in votes_four.most_common(4)]
+        pred_three_raw = [z for z, _ in votes_three.most_common(3)]
 
         # 一生肖保护（连空≥3追热）
         if miss_single >= 3:
@@ -76,14 +86,15 @@ def backtest_zodiac_stats(rows, lookback):
                 pred_two_raw[-1] = cold
         pred_two = pred_two_raw
 
-        # 三肖（4个）保护：连空≥3时，将最热生肖加入（替换最后一个）
-        if miss_three >= 3:
+        # ★ 三生肖保护：连空≥2时，强制使用“二生肖 + 最热生肖”
+        if miss_three >= 2:
             hot = get_hot_zodiac(train, window=10)
-            if hot not in pred_four_raw:
-                pred_four_raw[-1] = hot
-        pred_four = pred_four_raw[:4]
+            combined = list(dict.fromkeys(pred_two + [hot]))
+            pred_three = combined[:3]
+        else:
+            pred_three = pred_three_raw[:3]
 
-        # 统计一生肖
+        # 统计
         if pred_single in win_z:
             hits_single += 1
             miss_single = 0
@@ -91,7 +102,6 @@ def backtest_zodiac_stats(rows, lookback):
             miss_single += 1
             max_miss_single = max(max_miss_single, miss_single)
 
-        # 统计二生肖
         if any(z in win_z for z in pred_two):
             hits_two += 1
             miss_two = 0
@@ -99,8 +109,7 @@ def backtest_zodiac_stats(rows, lookback):
             miss_two += 1
             max_miss_two = max(max_miss_two, miss_two)
 
-        # 统计三生肖（预测4个，至少中2个）
-        hit_cnt = sum(1 for z in pred_four if z in win_z)
+        hit_cnt = sum(1 for z in pred_three if z in win_z)
         if hit_cnt >= 2:
             hits_three += 1
             miss_three = 0
@@ -128,21 +137,26 @@ def main():
     if args.show:
         votes_single = Counter()
         votes_two = Counter()
-        votes_four = Counter()
-        for w in OPTIMAL_WINDOWS:
-            votes_single[predict_strong_single(rows, {"single_recent_window": w, "single_special_boost": 3.2})] += 1
-            for p in predict_strong_two(rows, {"two_recent_window": w, "two_special_boost": 3.0}):
-                votes_two[p] += 1
-            for p in predict_strong_four(rows, w):
-                votes_four[p] += 1
+        votes_three = Counter()
+        for w, weight in WINDOW_WEIGHTS:
+            z_single = predict_strong_single(rows, {"single_recent_window": w, "single_special_boost": 3.2})
+            votes_single[z_single] += weight
+            for z in predict_strong_two(rows, {"two_recent_window": w, "two_special_boost": 3.0}):
+                votes_two[z] += weight
+            for z in predict_strong_three_with_window(rows, w):
+                votes_three[z] += weight
+        trend_zod = get_trend_zodiac(rows, window=5)
+        votes_three[trend_zod] += 0.5
+
         single = votes_single.most_common(1)[0][0]
         two = [z for z, _ in votes_two.most_common(2)]
-        four = [z for z, _ in votes_four.most_common(4)]
+        three = [z for z, _ in votes_three.most_common(3)]
+
         latest = rows[0]["issue_no"]
         print(f"预测期号: {next_issue(latest)}")
         print(f"一生肖: {single}")
         print(f"二生肖: {'、'.join(two)}")
-        print(f"三生肖（预测4个，需中2个）: {'、'.join(four)}")
+        print(f"三生肖: {'、'.join(three)}")
 
         stats10 = backtest_zodiac_stats(rows, 10)
         if stats10:
