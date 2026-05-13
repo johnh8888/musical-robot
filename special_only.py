@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-# special_only.py - 特五肖加权预测（正码0.7 + 特别号0.3）
+# special_only.py - 增强版特五肖（频率+遗漏+对肖）
 
 import argparse
 import json
 from collections import Counter
-from common import fetch_hk_records_merged, get_zodiac_by_number, next_issue
+from common import fetch_hk_records_merged, get_zodiac_by_number, next_issue, ZODIAC_MAP, ZODIAC_PAIR
 
 def get_history_rows_as_list(limit=None):
     records = fetch_hk_records_merged(limit=limit, prefer_local=True)
@@ -19,11 +19,31 @@ def get_history_rows_as_list(limit=None):
     return rows
 
 def predict_five_zodiac(rows):
+    # 基础频率：正码0.7，特别号0.3
     cnt = Counter()
     for r in rows[:100]:
         for n in json.loads(r["numbers_json"]):
             cnt[get_zodiac_by_number(n)] += 0.7
         cnt[get_zodiac_by_number(r["special_number"])] += 0.3
+    
+    # 遗漏补充：找出最近30期从未出现的生肖（或遗漏值最大的）
+    last_30_zodiacs = set()
+    for r in rows[:30]:
+        for n in json.loads(r["numbers_json"]):
+            last_30_zodiacs.add(get_zodiac_by_number(n))
+        last_30_zodiacs.add(get_zodiac_by_number(r["special_number"]))
+    # 给缺失的生肖加分
+    for z in ZODIAC_MAP:
+        if z not in last_30_zodiacs:
+            cnt[z] += 0.5  # 冷门加分
+    
+    # 对肖倾向：上期特别号的对肖
+    if rows:
+        last_sp_zod = get_zodiac_by_number(rows[0]["special_number"])
+        pair = ZODIAC_PAIR.get(last_sp_zod)
+        if pair:
+            cnt[pair] += 0.3
+    
     most_common = cnt.most_common(5)
     return [z for z, _ in most_common]
 
