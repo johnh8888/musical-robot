@@ -1,4 +1,4 @@
-name: 香港六合彩预测
+name: 香港六合彩预测 (机器学习版)
 
 on:
   schedule:
@@ -21,10 +21,24 @@ jobs:
         run: |
           pip install --upgrade pip
           pip install -r requirements.txt
-      - name: 生肖预测
-        run: python zodiac_main.py --show
-      - name: 特别号预测
-        run: python special_only.py --show
+          pip install xgboost lightgbm scikit-learn pandas numpy
+      - name: 训练模型（若不存在）
+        run: |
+          if [ ! -f "xgboost_zodiac_3.json" ] || [ ! -f "lgb_special_ranker.txt" ]; then
+            python train_ml_zodiac.py
+            python train_ml_special.py
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add xgboost_zodiac_3.json lgb_special_ranker.txt
+            git commit -m "Train ML models" || echo "No changes"
+            git push || echo "Push failed"
+          else
+            echo "模型已存在"
+          fi
+      - name: 一二三生肖预测（机器学习融合）
+        run: python zodiac_main_ml.py --show
+      - name: 特五肖预测（机器学习）
+        run: python special_only_ml.py --show
       - name: 上传结果
         uses: actions/upload-artifact@v4
         with:
