@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# special_only.py - 增强版特五肖（频率+遗漏+对肖）
+# special_only.py - 增强版特五肖（正码0.8+冷门+邻肖+对肖）
 
 import argparse
 import json
@@ -19,33 +19,41 @@ def get_history_rows_as_list(limit=None):
     return rows
 
 def predict_five_zodiac(rows):
-    # 基础频率：正码0.7，特别号0.3
     cnt = Counter()
+    # 正码权重0.8，特别号权重0.2
     for r in rows[:100]:
         for n in json.loads(r["numbers_json"]):
-            cnt[get_zodiac_by_number(n)] += 0.7
-        cnt[get_zodiac_by_number(r["special_number"])] += 0.3
+            cnt[get_zodiac_by_number(n)] += 0.8
+        cnt[get_zodiac_by_number(r["special_number"])] += 0.2
     
-    # 遗漏补充：找出最近30期从未出现的生肖（或遗漏值最大的）
-    last_30_zodiacs = set()
-    for r in rows[:30]:
+    # 冷门补充：最近50期从未出现的生肖给予额外0.6分
+    appeared = set()
+    for r in rows[:50]:
         for n in json.loads(r["numbers_json"]):
-            last_30_zodiacs.add(get_zodiac_by_number(n))
-        last_30_zodiacs.add(get_zodiac_by_number(r["special_number"]))
-    # 给缺失的生肖加分
+            appeared.add(get_zodiac_by_number(n))
+        appeared.add(get_zodiac_by_number(r["special_number"]))
     for z in ZODIAC_MAP:
-        if z not in last_30_zodiacs:
-            cnt[z] += 0.5  # 冷门加分
+        if z not in appeared:
+            cnt[z] += 0.6
     
-    # 对肖倾向：上期特别号的对肖
-    if rows:
-        last_sp_zod = get_zodiac_by_number(rows[0]["special_number"])
-        pair = ZODIAC_PAIR.get(last_sp_zod)
-        if pair:
-            cnt[pair] += 0.3
+    # 邻肖加成：上期特别号的左右相邻生肖
+    last_zod = get_zodiac_by_number(rows[0]["special_number"])
+    zodiac_order = ["鼠","牛","虎","兔","龙","蛇","马","羊","猴","鸡","狗","猪"]
+    try:
+        idx = zodiac_order.index(last_zod)
+        neighbors = [zodiac_order[(idx-1)%12], zodiac_order[(idx+1)%12]]
+        for nz in neighbors:
+            cnt[nz] += 0.2
+    except:
+        pass
     
-    most_common = cnt.most_common(5)
-    return [z for z, _ in most_common]
+    # 对肖加成
+    pair = ZODIAC_PAIR.get(last_zod)
+    if pair:
+        cnt[pair] += 0.3
+    
+    # 最终取top5
+    return [z for z, _ in cnt.most_common(5)]
 
 def backtest_five_zodiac(rows, lookback):
     rows_rev = list(reversed(rows))
