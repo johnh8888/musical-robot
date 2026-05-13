@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# zodiac_main.py - 最终稳定版（经典6窗口，三生肖严格中2个）
+# zodiac_main.py - 强化三生肖保护版
 
 import argparse
 import json
@@ -7,7 +7,7 @@ from collections import Counter
 from common import fetch_hk_records_merged, get_zodiac_by_number, next_issue
 from strategies_zodiac import (
     predict_strong_single, predict_strong_two, predict_strong_three_with_window,
-    get_hot_zodiac, get_cold_zodiac
+    get_hot_zodiac, get_cold_zodiac, _zodiac_omission_map
 )
 
 DEFAULT_PARAMS = {
@@ -85,23 +85,24 @@ def backtest_zodiac_stats(rows, lookback, params):
         pred_two_raw = [z for z, _ in votes_two.most_common(2)]
         pred_three_raw = [z for z, _ in votes_three.most_common(3)]
 
-        # 一生肖保护：连空>=3追热
+        # 一生肖保护
         if miss_single >= 3:
             pred_single = get_hot_zodiac(train, window=10)
         else:
             pred_single = pred_single_raw
 
-        # 二生肖保护：连空>=2补入最冷
+        # 二生肖保护
         if miss_two >= miss_two_threshold:
             cold = get_cold_zodiac(train, window=30)
             if cold not in pred_two_raw:
                 pred_two_raw[-1] = cold
         pred_two = pred_two_raw
 
-        # 三生肖保护：连空>=3时使用“二生肖+最热”
-        if miss_three >= 3:
+        # ★ 三生肖强化保护：连空≥2时，使用“二生肖 + 最热生肖 + 最冷生肖”的组合
+        if miss_three >= 2:
             hot = get_hot_zodiac(train, window=10)
-            combined = list(dict.fromkeys(pred_two + [hot]))
+            cold = get_cold_zodiac(train, window=30)
+            combined = list(dict.fromkeys(pred_two + [hot, cold]))
             pred_three = combined[:3]
         else:
             pred_three = pred_three_raw[:3]
