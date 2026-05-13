@@ -77,4 +77,4 @@ def main():
             print(f"近100期回测：特五肖命中率 {hit100:.1%}，最大连空 {miss100}")
 
 if __name__ == "__main__":
-    main()
+    main() 
