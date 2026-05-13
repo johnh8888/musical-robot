@@ -24,7 +24,6 @@ def predict_five_zodiac(rows):
         for n in json.loads(r["numbers_json"]):
             cnt[get_zodiac_by_number(n)] += 0.7
         cnt[get_zodiac_by_number(r["special_number"])] += 0.3
-    # 遗漏加分：最近50期从未出现的生肖加0.5
     appeared = set()
     for r in rows[:50]:
         for n in json.loads(r["numbers_json"]):
