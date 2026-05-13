@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# special_only.py - 特五肖：正码+特别号频率 + 遗漏加分
+# special_only.py - 特五肖（频率+遗漏）
 
 import argparse
 import json
