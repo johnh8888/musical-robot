@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-# special_only.py - 特五肖4窗口投票 + 强制融合二生肖
+# special_only.py - 特六肖（预测6个生肖），4窗口投票 + 强制融合二生肖
 
 import argparse
 import json
 from collections import Counter
-from common import fetch_hk_records_merged, get_zodiac_by_number, next_issue, ZODIAC_MAP, ZODIAC_PAIR
+from common import fetch_hk_records_merged, get_zodiac_by_number, next_issue, ZODIAC_MAP
 from strategies_zodiac import predict_strong_two
 
-# 特五肖投票窗口（4个经典窗口）
+# 投票窗口（4个经典窗口）
 WINDOWS = [8, 12, 20, 30]
 
 def get_history_rows_as_list(limit=None):
@@ -23,6 +23,7 @@ def get_history_rows_as_list(limit=None):
     return rows
 
 def compute_zodiac_score(rows, window, special_boost=2.0):
+    """计算每个生肖在给定窗口内的得分（正码+特别号加权）"""
     scores = {z: 0 for z in ZODIAC_MAP}
     for r in rows[:window]:
         for n in json.loads(r["numbers_json"]):
@@ -32,32 +33,39 @@ def compute_zodiac_score(rows, window, special_boost=2.0):
         scores[sp_z] += special_boost
     return scores
 
-def predict_five_zodiac_fused(rows, windows):
-    # 1. 窗口投票得到基础5个生肖
+def predict_six_zodiac_fused(rows, windows):
+    """
+    融合策略：
+    1. 多窗口投票得到基础排名
+    2. 强制将当前二生肖的两个生肖加入结果
+    3. 补充票数最高的其余生肖，直到凑满6个
+    """
+    # 窗口投票
     votes = Counter()
     for w in windows:
         scores = compute_zodiac_score(rows, w, special_boost=2.0)
-        top5 = sorted(scores, key=scores.get, reverse=True)[:5]
-        for z in top5:
+        top6 = sorted(scores, key=scores.get, reverse=True)[:6]
+        for z in top6:
             votes[z] += 1
-    base_top5 = [z for z, _ in votes.most_common(5)]
+    base_top6 = [z for z, _ in votes.most_common(6)]
     
-    # 2. 获取二生肖（使用与 zodiac_main.py 一致的参数）
+    # 获取二生肖（与 zodiac_main.py 参数一致）
     two_zodiac = predict_strong_two(rows, {"two_recent_window": 20, "two_special_boost": 3.0})
     
-    # 3. 融合：二生肖优先，然后补充 base_top5 中不重复的，取前5
+    # 融合：二生肖优先，然后补充基础排名中不重复的生肖，取前6
     fused = []
     for z in two_zodiac:
         if z not in fused:
             fused.append(z)
-    for z in base_top5:
-        if len(fused) >= 5:
+    for z in base_top6:
+        if len(fused) >= 6:
             break
         if z not in fused:
             fused.append(z)
-    return fused[:5]
+    return fused[:6]
 
-def backtest_five_zodiac(rows, lookback, windows):
+def backtest_six_zodiac(rows, lookback, windows):
+    """回测特六肖命中率和最大连空"""
     rows_rev = list(reversed(rows))
     total = min(lookback, len(rows_rev) - 20)
     if total <= 0:
@@ -69,7 +77,7 @@ def backtest_five_zodiac(rows, lookback, windows):
         train = rows_rev[i+20:]
         actual = rows_rev[i]["special_number"]
         actual_zod = get_zodiac_by_number(actual)
-        pred = predict_five_zodiac_fused(train, windows)
+        pred = predict_six_zodiac_fused(train, windows)
         if actual_zod in pred:
             hits += 1
             miss_streak = 0
@@ -87,18 +95,18 @@ def main():
         print("数据获取失败")
         return
     if args.show:
-        zodiac5 = predict_five_zodiac_fused(rows, WINDOWS)
+        six_zodiac = predict_six_zodiac_fused(rows, WINDOWS)
         latest = rows[0]["issue_no"]
         pred_issue = next_issue(latest)
         print(f"预测期号: {pred_issue}")
-        print(f"\n【特五肖推荐 (4窗口+二生肖融合)】: {'、'.join(zodiac5)}")
+        print(f"\n【特六肖推荐 (4窗口+二生肖融合)】: {'、'.join(six_zodiac)}")
         print(f"使用窗口: {WINDOWS}")
 
-        hit10, miss10 = backtest_five_zodiac(rows, 10, WINDOWS)
-        hit100, miss100 = backtest_five_zodiac(rows, 100, WINDOWS)
+        hit10, miss10 = backtest_six_zodiac(rows, 10, WINDOWS)
+        hit100, miss100 = backtest_six_zodiac(rows, 100, WINDOWS)
         if hit10 is not None:
-            print(f"\n近10期回测：特五肖命中率 {hit10:.1%}，最大连空 {miss10}")
-            print(f"近100期回测：特五肖命中率 {hit100:.1%}，最大连空 {miss100}")
+            print(f"\n近10期回测：特六肖命中率 {hit10:.1%}，最大连空 {miss10}")
+            print(f"近100期回测：特六肖命中率 {hit100:.1%}，最大连空 {miss100}")
 
 if __name__ == "__main__":
     main()
