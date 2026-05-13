@@ -1,7 +1,7 @@
 name: 自动搜索最佳窗口组合
 
 on:
-  workflow_dispatch:   # 手动触发
+  workflow_dispatch:
 
 jobs:
   optimize:
@@ -25,15 +25,34 @@ jobs:
       - name: 运行搜索脚本
         run: python search_best_windows.py > windows_result.txt
 
-      - name: 提取最佳窗口
-        id: extract
+      - name: 提取最佳窗口并更新 zodiac_main.py
         run: |
-          BEST_WINDOWS=$(grep "建议将" windows_result.txt | sed -n 's/.*= //p' | tr -d '[]')
-          echo "best_windows=$BEST_WINDOWS" >> $GITHUB_OUTPUT
+          python - <<EOF
+          import re
+          with open('windows_result.txt', 'r') as f:
+              content = f.read()
+          # 查找 "建议将 `OPTIMAL_WINDOWS = [ ... ]` 应用到"
+          match = re.search(r'OPTIMAL_WINDOWS = \[([^\]]+)\]', content)
+          if match:
+              windows_str = match.group(1)
+              windows = [int(x.strip()) for x in windows_str.split(',')]
+              # 读取 zodiac_main.py
+              with open('zodiac_main.py', 'r') as f:
+                  lines = f.readlines()
+              # 修改 OPTIMAL_WINDOWS 行
+              for i, line in enumerate(lines):
+                  if line.strip().startswith('OPTIMAL_WINDOWS ='):
+                      lines[i] = f'OPTIMAL_WINDOWS = {windows}\n'
+                      break
+              with open('zodiac_main.py', 'w') as f:
+                  f.writelines(lines)
+              print(f"已将 OPTIMAL_WINDOWS 更新为 {windows}")
+          else:
+              print("未找到最佳窗口，请手动检查 windows_result.txt")
+          EOF
 
-      - name: 修改 zodiac_main.py
+      - name: 提交更改
         run: |
-          sed -i "s/OPTIMAL_WINDOWS = .*/OPTIMAL_WINDOWS = [${{ steps.extract.outputs.best_windows }}]/" zodiac_main.py
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add zodiac_main.py
