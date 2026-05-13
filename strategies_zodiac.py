@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# strategies_zodiac.py - 增强规则策略（支持追热/追冷，次热获取）
+# strategies_zodiac.py - 增强规则策略（支持预测4个生肖）
 
 import json
 from collections import Counter
@@ -45,6 +45,7 @@ def _compute_zodiac_score(rows, recent_window=20, special_boost=2.0):
         for r in rows[:recent_window]:
             if _row_special(r) in nums:
                 special_bonus += special_boost
+        # 对肖加成（可选，保留）
         pair = ZODIAC_PAIR.get(z)
         if pair:
             pair_bonus = 0
@@ -77,6 +78,12 @@ def predict_strong_three_with_window(rows, window, xgb_weight=0.0, xgb_model=Non
     sorted_z = sorted(scores.items(), key=lambda x: -x[1])
     return [z for z, _ in sorted_z[:3]]
 
+def predict_strong_four(rows, window, xgb_weight=0.0, xgb_model=None):
+    """预测4个生肖（用于三生肖策略）"""
+    scores = _compute_zodiac_score(rows, recent_window=window, special_boost=2.0)
+    sorted_z = sorted(scores.items(), key=lambda x: -x[1])
+    return [z for z, _ in sorted_z[:4]]
+
 def get_hot_zodiac(rows, window=10):
     zodiacs = []
     for r in rows[:window]:
@@ -85,20 +92,6 @@ def get_hot_zodiac(rows, window=10):
         zodiacs.append(get_zodiac_by_number(_row_special(r)))
     cnt = Counter(zodiacs)
     return cnt.most_common(1)[0][0] if cnt else "鼠"
-
-def get_second_hot_zodiac(rows, window=10, exclude=None):
-    """获取次热生肖（可排除某个生肖）"""
-    zodiacs = []
-    for r in rows[:window]:
-        for n in _row_numbers(r):
-            zodiacs.append(get_zodiac_by_number(n))
-        zodiacs.append(get_zodiac_by_number(_row_special(r)))
-    cnt = Counter(zodiacs)
-    if exclude and exclude in cnt:
-        del cnt[exclude]
-    if not cnt:
-        return "鼠"
-    return cnt.most_common(1)[0][0]
 
 def get_cold_zodiac(rows, window=30):
     omission = {z: 0 for z in ZODIAC_MAP}
