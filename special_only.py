@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# special_only.py - 香港特五肖预测（高命中低连空版）
+# special_only.py - 香港特五肖预测（稳定平衡版）
 import argparse, gzip, json, re, time, urllib.request
 from collections import Counter
 from itertools import combinations
@@ -86,27 +86,25 @@ def _parse_nums(value):
         except: pass
     return out
 
-# ===================== 激进参数 =====================
-CANDIDATE_WINDOWS = [4,6,8,10,12,15,18,20,24]   # 仅保留中短窗口
+# ===================== 平衡参数（回归60%稳定版 + 微调） =====================
+CANDIDATE_WINDOWS = [4,6,8,10,12,15,18,20,24,30,36,42,48,54,60]
 OPTIMAL_WINDOWS = [4,6,8,10,12]
 
 SPECIAL_WEIGHT = 1.0
-COLD_BASE = 2.0               # 基础冷号加票大幅提升
+COLD_BASE = 1.0               # 从0.8微调至1.0，略增冷号影响力
 COLD_STEP = 0.3
-COLD_MAX = 2.5                # 上限提高
-MISS_PENALTY = 0.3            # 优化时强烈惩罚连空
+COLD_MAX = 1.5                # 恢复原上限
+MISS_PENALTY = 0.1
 ADAPTIVE_LOOKBACK = 10
 BASE_NORMAL_WEIGHT = 0.5
-SIGNAL_THRESHOLD = 0.4        # 降低门槛，更容易启用正码
+SIGNAL_THRESHOLD = 0.5        # 恢复原门槛
 RECOMMEND_COUNT = 5
 
-# 趋势感知参数
+# 趋势感知（保留温和版）
 TREND_LOOKBACK = 12
 HOT_OVERHEAT_THRESHOLD = 0.7
-HOT_OVERHEAT_COLD_MULT = 2.5  # 过热时冷号乘数提高
-COLD_UNDERHEAT_HOT_BOOST = 1.2
 
-def w_weight(w, base=60):
+def w_weight(w, base=84):
     return round(base/w, 2)
 
 # ===================== 辅助函数 =====================
@@ -154,16 +152,16 @@ def trend_factor(history):
             hot_hit += 1
     ratio = hot_hit/total
     if ratio > HOT_OVERHEAT_THRESHOLD:
-        return 0.9, HOT_OVERHEAT_COLD_MULT
+        return 0.9, 1.5      # 过热时适度提高冷号
     elif ratio < 0.3:
-        return COLD_UNDERHEAT_HOT_BOOST, 0.8
+        return 1.0, 0.8
     return 1.0, 1.0
 
 def dynamic_cold_bonus(om_val):
     if om_val <= 0: return 0.0
     return min(COLD_BASE + (om_val//10)*COLD_STEP, COLD_MAX)
 
-# ===================== 推荐核心（连空保护改为保留1+换4冷） =====================
+# ===================== 推荐核心（恢复平衡版连空保护） =====================
 def recommend(history, windows, force_cold=False):
     if not history: return ZODIAC_LIST[:RECOMMEND_COUNT]
 
@@ -186,7 +184,6 @@ def recommend(history, windows, force_cold=False):
         for z,_ in cnt.most_common(RECOMMEND_COUNT):
             votes[z] += w_weight(w)
 
-    # 动态冷号加票
     for z in sorted_cold:
         base_bonus = dynamic_cold_bonus(om[z])
         if base_bonus > 0:
@@ -194,10 +191,10 @@ def recommend(history, windows, force_cold=False):
 
     preds = [z for z,_ in votes.most_common(RECOMMEND_COUNT)]
 
-    # 连空保护：仅保留得票最高的1个，其余4个替换为最冷4个（去重）
+    # 连空保护：保留前3，后2换最冷2（恢复原方式）
     if force_cold and len(preds) >= RECOMMEND_COUNT:
-        keep = preds[:1]                                     # 只保留第1名
-        new_cold = [z for z in sorted_cold[:4] if z not in keep]  # 最冷4个
+        keep = preds[:3]
+        new_cold = [z for z in sorted_cold[:2] if z not in keep]
         preds = keep + new_cold
         while len(preds) < RECOMMEND_COUNT:
             for z,_ in votes.most_common():
@@ -218,7 +215,7 @@ def backtest(rows, lookback, windows):
         train = rev[i+20:]
         if len(train)<20: continue
         actual_z = get_zodiac(rev[i]["special_number"])
-        preds = recommend(train, windows, force_cold=(cur_miss >= 1))  # 连空1期即保护
+        preds = recommend(train, windows, force_cold=(cur_miss >= 1))
         if actual_z in preds:
             hits += 1
             cur_miss = 0
