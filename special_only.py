@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
-# special_only.py - 特六肖（预测6个生肖），5窗口投票 + 强制融合二生肖
+# special_only.py - 特六肖（预测6个生肖），5窗口投票
 
 import argparse
 import json
 from collections import Counter
 from common import fetch_hk_records_merged, get_zodiac_by_number, next_issue, ZODIAC_MAP
-from strategies_zodiac import predict_strong_two
 
 # 投票窗口（5个，与二生肖/三生肖一致）
 WINDOWS = [8, 12, 15, 25, 30]
@@ -32,30 +31,14 @@ def compute_zodiac_score(rows, window, special_boost=2.0):
         scores[sp_z] += special_boost
     return scores
 
-def predict_six_zodiac_fused(rows, windows):
-    # 1. 窗口投票得到基础排名
+def predict_six_zodiac(rows, windows):
     votes = Counter()
     for w in windows:
         scores = compute_zodiac_score(rows, w, special_boost=2.0)
         top6 = sorted(scores, key=scores.get, reverse=True)[:6]
         for z in top6:
             votes[z] += 1
-    base_top6 = [z for z, _ in votes.most_common(6)]
-    
-    # 2. 获取二生肖
-    two_zodiac = predict_strong_two(rows, {"two_recent_window": 20, "two_special_boost": 3.0})
-    
-    # 3. 融合：二生肖优先，然后补充基础排名中不重复的，取前6
-    fused = []
-    for z in two_zodiac:
-        if z not in fused:
-            fused.append(z)
-    for z in base_top6:
-        if len(fused) >= 6:
-            break
-        if z not in fused:
-            fused.append(z)
-    return fused[:6]
+    return [z for z, _ in votes.most_common(6)]
 
 def backtest_six_zodiac(rows, lookback, windows):
     rows_rev = list(reversed(rows))
@@ -69,7 +52,7 @@ def backtest_six_zodiac(rows, lookback, windows):
         train = rows_rev[i+20:]
         actual = rows_rev[i]["special_number"]
         actual_zod = get_zodiac_by_number(actual)
-        pred = predict_six_zodiac_fused(train, windows)
+        pred = predict_six_zodiac(train, windows)
         if actual_zod in pred:
             hits += 1
             miss_streak = 0
@@ -87,11 +70,11 @@ def main():
         print("数据获取失败")
         return
     if args.show:
-        six_zodiac = predict_six_zodiac_fused(rows, WINDOWS)
+        six_zodiac = predict_six_zodiac(rows, WINDOWS)
         latest = rows[0]["issue_no"]
         pred_issue = next_issue(latest)
         print(f"预测期号: {pred_issue}")
-        print(f"\n【特六肖推荐 (5窗口+二生肖融合)】: {'、'.join(six_zodiac)}")
+        print(f"\n【特六肖推荐 (5窗口投票)】: {'、'.join(six_zodiac)}")
         print(f"使用窗口: {WINDOWS}")
 
         hit10, miss10 = backtest_six_zodiac(rows, 10, WINDOWS)
