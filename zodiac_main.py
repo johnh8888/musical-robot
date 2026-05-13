@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# zodiac_main.py - 一生肖2窗口（8,20），二/三生肖4窗口（8,12,20,30）
+# zodiac_main.py - 一生肖5窗口（8,10,12,20,30），二/三生肖4窗口（8,12,20,30）
 
 import argparse
 import json
@@ -10,8 +10,8 @@ from strategies_zodiac import (
     get_hot_zodiac, get_cold_zodiac
 )
 
-# 一生肖专用窗口（2个）
-SINGLE_WINDOWS = [8, 20]
+# 一生肖专用窗口（5个）
+SINGLE_WINDOWS = [8, 10, 12, 20, 30]
 # 二生肖和三生肖窗口（4个）
 MAIN_WINDOWS = [8, 12, 20, 30]
 
@@ -52,7 +52,7 @@ def backtest_all_zodiac(rows, lookback):
         win_z = {get_zodiac_by_number(n) for n in win_main}
         win_z.add(get_zodiac_by_number(win_sp))
 
-        # 一生肖使用2窗口投票
+        # 一生肖使用5窗口投票
         votes_single = Counter()
         for w in SINGLE_WINDOWS:
             votes_single[predict_strong_single(train, {"single_recent_window": w, "single_special_boost": 3.2})] += 1
@@ -136,7 +136,7 @@ def main():
         print("数据获取失败")
         return
     if args.show:
-        # 当前预测：一生肖用2窗口，二/三生肖用4窗口
+        # 当前预测：一生肖用5窗口，二/三生肖用4窗口
         votes_single = Counter()
         for w in SINGLE_WINDOWS:
             votes_single[predict_strong_single(rows, {"single_recent_window": w, "single_special_boost": 3.2})] += 1
