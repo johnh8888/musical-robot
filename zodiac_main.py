@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# zodiac_main.py - 使用最佳参数（从 best_params.json 读取）
+# zodiac_main.py - 最终稳定版（经典6窗口，三生肖严格中2个）
 
 import argparse
 import json
@@ -13,7 +13,7 @@ from strategies_zodiac import (
 DEFAULT_PARAMS = {
     "windows": [8, 10, 12, 18, 20, 30],
     "single_boost": 3.2,
-    "two_boost": 3.0,
+    "two_boost": 2.5,
     "miss_two_threshold": 2,
     "three_use_strict": True
 }
@@ -85,17 +85,20 @@ def backtest_zodiac_stats(rows, lookback, params):
         pred_two_raw = [z for z, _ in votes_two.most_common(2)]
         pred_three_raw = [z for z, _ in votes_three.most_common(3)]
 
+        # 一生肖保护：连空>=3追热
         if miss_single >= 3:
             pred_single = get_hot_zodiac(train, window=10)
         else:
             pred_single = pred_single_raw
 
+        # 二生肖保护：连空>=2补入最冷
         if miss_two >= miss_two_threshold:
             cold = get_cold_zodiac(train, window=30)
             if cold not in pred_two_raw:
                 pred_two_raw[-1] = cold
         pred_two = pred_two_raw
 
+        # 三生肖保护：连空>=3时使用“二生肖+最热”
         if miss_three >= 3:
             hot = get_hot_zodiac(train, window=10)
             combined = list(dict.fromkeys(pred_two + [hot]))
@@ -103,7 +106,7 @@ def backtest_zodiac_stats(rows, lookback, params):
         else:
             pred_three = pred_three_raw[:3]
 
-        # 统计...
+        # 统计
         if pred_single in win_z:
             hits_single += 1
             miss_single = 0
