@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# special_only.py - 香港特五肖预测（稳定平衡版）
+# special_only.py - 香港特五肖预测（命中率优先版）
 import argparse, gzip, json, re, time, urllib.request
 from collections import Counter
 from itertools import combinations
@@ -86,23 +86,25 @@ def _parse_nums(value):
         except: pass
     return out
 
-# ===================== 平衡参数（回归60%稳定版 + 微调） =====================
+# ===================== 命中率优先参数 =====================
 CANDIDATE_WINDOWS = [4,6,8,10,12,15,18,20,24,30,36,42,48,54,60]
 OPTIMAL_WINDOWS = [4,6,8,10,12]
 
 SPECIAL_WEIGHT = 1.0
-COLD_BASE = 1.0               # 从0.8微调至1.0，略增冷号影响力
+COLD_BASE = 1.2               # 冷号基础加票1.2（比激进版低，比原版0.8高）
 COLD_STEP = 0.3
-COLD_MAX = 1.5                # 恢复原上限
-MISS_PENALTY = 0.1
+COLD_MAX = 1.5                # 上限1.5，避免喧宾夺主
+MISS_PENALTY = 0.1            # 连空惩罚
 ADAPTIVE_LOOKBACK = 10
 BASE_NORMAL_WEIGHT = 0.5
-SIGNAL_THRESHOLD = 0.5        # 恢复原门槛
+SIGNAL_THRESHOLD = 0.4        # 降低门槛，更容易启用正码增强
 RECOMMEND_COUNT = 5
 
-# 趋势感知（保留温和版）
+# 趋势感知参数（适度增强冷号应对过热）
 TREND_LOOKBACK = 12
 HOT_OVERHEAT_THRESHOLD = 0.7
+HOT_COLD_MULT = 1.8           # 过热时冷号乘数1.8
+COLD_HOT_BOOST = 1.1          # 过冷时热号略微提升
 
 def w_weight(w, base=84):
     return round(base/w, 2)
@@ -152,16 +154,16 @@ def trend_factor(history):
             hot_hit += 1
     ratio = hot_hit/total
     if ratio > HOT_OVERHEAT_THRESHOLD:
-        return 0.9, 1.5      # 过热时适度提高冷号
+        return 0.9, HOT_COLD_MULT      # 过热：降热号，升冷号
     elif ratio < 0.3:
-        return 1.0, 0.8
+        return COLD_HOT_BOOST, 0.8     # 过冷：升热号，降冷号
     return 1.0, 1.0
 
 def dynamic_cold_bonus(om_val):
     if om_val <= 0: return 0.0
     return min(COLD_BASE + (om_val//10)*COLD_STEP, COLD_MAX)
 
-# ===================== 推荐核心（恢复平衡版连空保护） =====================
+# ===================== 推荐核心 =====================
 def recommend(history, windows, force_cold=False):
     if not history: return ZODIAC_LIST[:RECOMMEND_COUNT]
 
@@ -191,7 +193,7 @@ def recommend(history, windows, force_cold=False):
 
     preds = [z for z,_ in votes.most_common(RECOMMEND_COUNT)]
 
-    # 连空保护：保留前3，后2换最冷2（恢复原方式）
+    # 连空保护：保留前3，后2换最冷2
     if force_cold and len(preds) >= RECOMMEND_COUNT:
         keep = preds[:3]
         new_cold = [z for z in sorted_cold[:2] if z not in keep]
