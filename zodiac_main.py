@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# zodiac_main.py - 香港一二三生肖预测（三肖连空优化版）
+# zodiac_main.py - 香港一二三生肖预测（三肖增强版）
 import argparse, gzip, json, re, time, urllib.request
 from collections import Counter
 from itertools import combinations
@@ -31,7 +31,7 @@ def next_issue(issue_no: str) -> str:
     except:
         return issue_no
 
-# ===================== 在线获取香港六合彩（120期） =====================
+# ===================== 在线数据获取（120期） =====================
 def fetch_hk_online(limit=120):
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
@@ -88,10 +88,10 @@ def _parse_nums(value):
         except: pass
     return out
 
-# ===================== 策略参数 =====================
-CANDIDATE_SINGLE = [4,6,8,10,12,15,18,20,24,30]   # 一肖（不变）
-CANDIDATE_TWO    = [4,6,8,10,12,15,18,20,24,30,36,42] # 二肖（不变）
-CANDIDATE_THREE  = [4,6,8,10,12,15,18,20,24,30]   # 三肖（移除长窗口）
+# ===================== 参数 =====================
+CANDIDATE_SINGLE = [4,6,8,10,12,15,18,20,24,30]
+CANDIDATE_TWO    = [4,6,8,10,12,15,18,20,24,30,36,42]
+CANDIDATE_THREE  = [4,6,8,10,12,15,18,20,24,30]   # 三肖候选窗口（无长周期）
 
 OPTIMAL_SINGLE = [6,10,12,18]
 OPTIMAL_TWO    = [4,6,8,10,12]
@@ -99,13 +99,18 @@ OPTIMAL_THREE  = [8,10,12,15]
 
 SINGLE_BOOST = 3.2
 TWO_BOOST    = 3.0
-MISS_PROTECT = 1           # 连空保护阈值
-THREE_MISS_PENALTY = 0.2   # 三肖优化惩罚系数（提高）
+MISS_PROTECT = 1
+THREE_MISS_PENALTY = 0.2
+
+# 三肖新增参数（与特五肖类似）
+THREE_NORMAL_WEIGHT = 0.3        # 正码权重（当信号强时使用）
+THREE_SIGNAL_THRESHOLD = 0.5     # 正码信号阈值
+THREE_ADAPTIVE_LOOKBACK = 10
 
 def w_weight(w, base=42):
     return round(base/w, 2)
 
-# ===================== 策略核心函数 =====================
+# ===================== 通用工具 =====================
 def omission_map(rows):
     if not rows: return {z:0 for z in ZODIAC_LIST}
     om = {z:0 for z in ZODIAC_LIST}
@@ -116,6 +121,29 @@ def omission_map(rows):
             om[z] = 0 if z in appeared else om[z]+1
     return om
 
+# ===================== 三肖增强：正码信号检测 =====================
+def three_normal_signal(history):
+    """检测最近10期正码对特码的命中率，决定是否启用正码增强"""
+    if len(history) < THREE_ADAPTIVE_LOOKBACK + 1:
+        return False, 0.0
+    recent = history[-(THREE_ADAPTIVE_LOOKBACK+1):]
+    hits = 0
+    for i in range(len(recent)-1):
+        cur_set = set(get_zodiac(n) for n in recent[i]["numbers"])
+        if get_zodiac(recent[i+1]["special_number"]) in cur_set:
+            hits += 1
+    rate = hits / (len(recent)-1)
+    if rate >= THREE_SIGNAL_THRESHOLD:
+        return True, THREE_NORMAL_WEIGHT
+    return False, 0.0
+
+# ===================== 三肖增强：动态冷号加票 =====================
+def three_cold_bonus(omission_val):
+    if omission_val <= 0: return 0.0
+    # 基础0.8，每多10期+0.3，上限1.5
+    return min(0.8 + (omission_val // 10) * 0.3, 1.5)
+
+# ===================== 预测函数（一肖、二肖不变，三肖增强） =====================
 def pred_single(train, w, boost=SINGLE_BOOST):
     recent = train[-w:] if len(train)>=w else train
     cnt = Counter()
@@ -132,25 +160,37 @@ def pred_two(train, w, boost=TWO_BOOST):
         cnt[get_zodiac(r["special_number"])] += boost
     return [z for z,_ in cnt.most_common(2)]
 
-def pred_three(train, w):
+def pred_three(train, w, use_normal=False, normal_w=0.0):
+    """三肖单窗口预测，支持正码增强"""
     recent = train[-w:] if len(train)>=w else train
     cnt = Counter()
     for r in recent:
-        for n in r["numbers"]: cnt[get_zodiac(n)] += 1
+        # 特码加权
         cnt[get_zodiac(r["special_number"])] += 1
+        # 正码加权（如果信号启用）
+        if use_normal:
+            for n in r["numbers"]:
+                cnt[get_zodiac(n)] += normal_w
     return [z for z,_ in cnt.most_common(3)]
 
 def predict_all(history, w_s, w_t, w_th):
+    # 一肖投票
     vs = Counter()
     for w in w_s: vs[pred_single(history, w)] += w_weight(w)
     single = vs.most_common(1)[0][0]
+
+    # 二肖投票
     vt = Counter()
     for w in w_t:
         for z in pred_two(history, w): vt[z] += w_weight(w)
     two = [z for z,_ in vt.most_common(2)]
+
+    # 三肖投票（增强版）
+    use_n, nw = three_normal_signal(history)   # 信号检测
     vth = Counter()
     for w in w_th:
-        for z in pred_three(history, w): vth[z] += w_weight(w, 30)
+        for z in pred_three(history, w, use_n, nw):
+            vth[z] += w_weight(w, 30)           # 三肖基准30
     three = [z for z,_ in vth.most_common(3)]
     return single, two, three
 
@@ -168,12 +208,14 @@ def backtest(rows, lookback, w_s, w_t, w_th):
         win_z = set(get_zodiac(n) for n in actual["numbers"])
         win_z.add(get_zodiac(actual["special_number"]))
         om = omission_map(train)
+
         # 一肖
         vs = Counter()
         for w in w_s: vs[pred_single(train,w)] += w_weight(w)
         ps = vs.most_common(1)[0][0]
         if miss_s >= MISS_PROTECT and om:
             ps = max(om, key=om.get)
+
         # 二肖
         vt = Counter()
         for w in w_t:
@@ -182,18 +224,29 @@ def backtest(rows, lookback, w_s, w_t, w_th):
         if miss_t >= MISS_PROTECT and om:
             cold = max(om, key=om.get)
             if cold not in pt: pt[-1] = cold
-        # 三肖
+
+        # 三肖（增强版回测，包含正码和冷号动态加票）
+        use_n, nw = three_normal_signal(train)
         vth = Counter()
         for w in w_th:
-            for z in pred_three(train,w): vth[z] += w_weight(w, 30)
+            for z in pred_three(train, w, use_n, nw):
+                vth[z] += w_weight(w, 30)
+        # 动态冷号加票
+        for z in om:
+            bonus = three_cold_bonus(om[z])
+            if bonus > 0:
+                vth[z] += bonus
         pth = [z for z,_ in vth.most_common(3)]
+
+        # 连空保护
         if miss_th >= MISS_PROTECT and om:
-            cold2 = sorted(om, key=om.get, reverse=True)[:2]
-            pth = [pth[0]] + [c for c in cold2 if c != pth[0]]
+            coldest2 = sorted(om, key=om.get, reverse=True)[:2]
+            pth = [pth[0]] + [c for c in coldest2 if c != pth[0]]
             while len(pth) < 3:
                 for z,_ in vth.most_common():
                     if z not in pth: pth.append(z); break
                 else: pth.append("马")
+
         # 统计
         if ps in win_z: hit_s+=1; miss_s=0
         else: miss_s+=1; max_s=max(max_s,miss_s)
@@ -201,6 +254,7 @@ def backtest(rows, lookback, w_s, w_t, w_th):
         else: miss_t+=1; max_t=max(max_t,miss_t)
         if sum(1 for z in pth if z in win_z)>=2: hit_th+=1; miss_th=0
         else: miss_th+=1; max_th=max(max_th,miss_th)
+
     return {
         "s_hit": hit_s/total, "s_miss": max_s,
         "t_hit": hit_t/total, "t_miss": max_t,
@@ -228,7 +282,6 @@ def opt_two(rows, look=100):
 
 def opt_three(rows, look=100):
     best, score = [8,10,12,15], -1
-    # 三肖使用4窗口组合，惩罚系数提高
     for combo in combinations(CANDIDATE_THREE, 4):
         st = backtest(rows, look, OPTIMAL_SINGLE, OPTIMAL_TWO, list(combo))
         if st is None: continue
