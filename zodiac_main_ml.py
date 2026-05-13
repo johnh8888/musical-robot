@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# zodiac_main_ml.py - 三生肖（3中2）规则+模型融合，连空保护≥1
+# zodiac_main_ml.py - 三生肖（3中2）规则+模型融合，连空保护适中
 
 import argparse
 import json
@@ -26,7 +26,6 @@ def load_xgb_model():
         return None
 
 def get_model_probs(rows, model):
-    """用XGBoost为每个生肖输出概率"""
     window = 30
     hist = rows[:window]
     probs = []
@@ -112,16 +111,15 @@ def backtest_zodiac_stats(rows, lookback, model):
         else:
             pred_three = rule_top3
 
-        # ★ 连空保护：只要之前连空≥1，就强制用“二生肖 + 最热生肖”替换
-        # 注意：这里需要在每期获取二生肖和热肖，但为了简单，我们仅在回测中做保护
-        # 实际在主预测时也应类似处理。但为了回测准确，我们在此加入保护逻辑。
-        # 先计算二生肖（与主程序一致）
+        # 三生肖连空保护（当连续2期未中时，换成二生肖+最热生肖）
+        # 先计算当前的二生肖（用于保护）
         votes_two = Counter()
         for w, weight in WINDOW_WEIGHTS:
             for z in predict_strong_two(train, {"two_recent_window": w, "two_special_boost": 3.0}):
                 votes_two[z] += weight
         pred_two = [z for z, _ in votes_two.most_common(2)]
-        if miss_three >= 1:   # 只要上期未中，就干预
+
+        if miss_three >= 2:   # 连空2期即干预
             hot = get_hot_zodiac(train, window=10)
             combined = list(dict.fromkeys(pred_two + [hot]))
             pred_three = combined[:3]
@@ -169,10 +167,15 @@ def main():
         print(f"预测期号: {next_issue(latest)}")
         print(f"三生肖（3中2）: {'、'.join(pred_three)}")
 
-        # 回测近100期（使用保护逻辑）
-        hit_rate, max_miss = backtest_zodiac_stats(rows, 100, model)
-        if hit_rate:
-            print(f"\n近100期回测（三生肖）: 命中率 {hit_rate:.1%}，最大连空 {max_miss}")
+        # 近10期回测
+        hit10, miss10 = backtest_zodiac_stats(rows, 10, model)
+        if hit10 is not None:
+            print(f"\n近10期回测（三生肖）: 命中率 {hit10:.1%}，最大连空 {miss10}")
+
+        # 近100期回测
+        hit100, miss100 = backtest_zodiac_stats(rows, 100, model)
+        if hit100 is not None:
+            print(f"近100期回测（三生肖）: 命中率 {hit100:.1%}，最大连空 {miss100}")
 
 if __name__ == "__main__":
     main()
