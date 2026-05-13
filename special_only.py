@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-# special_only.py - 特五肖：正码频率 + 强冷门
+# special_only.py - 特五肖（指数加权移动平均）
 
 import argparse
 import json
 from collections import Counter
-from common import fetch_hk_records_merged, get_zodiac_by_number, next_issue, ZODIAC_MAP
+from common import fetch_hk_records_merged, get_zodiac_by_number, next_issue
 
 def get_history_rows_as_list(limit=None):
     records = fetch_hk_records_merged(limit=limit, prefer_local=True)
@@ -19,22 +19,19 @@ def get_history_rows_as_list(limit=None):
     return rows
 
 def predict_five_zodiac(rows):
+    # 正码指数加权（alpha=0.95，近期权重大）
+    alpha = 0.95
     cnt = Counter()
-    # 仅使用正码（权重1.0）
+    weight = 1.0
     for r in rows[:100]:
         for n in json.loads(r["numbers_json"]):
-            cnt[get_zodiac_by_number(n)] += 1.0
-    
-    # 冷门加分：最近50期从未出现的生肖直接加1.0
-    appeared = set()
+            cnt[get_zodiac_by_number(n)] += weight
+        weight *= alpha
+    # 特别号附加权重（衰减更快）
+    weight = 0.6
     for r in rows[:50]:
-        for n in json.loads(r["numbers_json"]):
-            appeared.add(get_zodiac_by_number(n))
-        appeared.add(get_zodiac_by_number(r["special_number"]))
-    for z in ZODIAC_MAP:
-        if z not in appeared:
-            cnt[z] += 1.0
-    
+        cnt[get_zodiac_by_number(r["special_number"])] += weight
+        weight *= 0.9
     return [z for z, _ in cnt.most_common(5)]
 
 def backtest_five_zodiac(rows, lookback):
