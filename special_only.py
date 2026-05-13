@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-# special_only.py - 增强版特五肖（正码0.8+冷门+邻肖+对肖）
+# special_only.py - 特五肖（正码+特别号+遗漏）
 
 import argparse
 import json
 from collections import Counter
-from common import fetch_hk_records_merged, get_zodiac_by_number, next_issue, ZODIAC_MAP, ZODIAC_PAIR
+from common import fetch_hk_records_merged, get_zodiac_by_number, next_issue, ZODIAC_MAP
 
 def get_history_rows_as_list(limit=None):
     records = fetch_hk_records_merged(limit=limit, prefer_local=True)
@@ -20,13 +20,13 @@ def get_history_rows_as_list(limit=None):
 
 def predict_five_zodiac(rows):
     cnt = Counter()
-    # 正码权重0.8，特别号权重0.2
+    # 正码权重0.7，特别号0.3
     for r in rows[:100]:
         for n in json.loads(r["numbers_json"]):
-            cnt[get_zodiac_by_number(n)] += 0.8
-        cnt[get_zodiac_by_number(r["special_number"])] += 0.2
+            cnt[get_zodiac_by_number(n)] += 0.7
+        cnt[get_zodiac_by_number(r["special_number"])] += 0.3
     
-    # 冷门补充：最近50期从未出现的生肖给予额外0.6分
+    # 遗漏加成：最近50期从未出现的生肖加0.5
     appeared = set()
     for r in rows[:50]:
         for n in json.loads(r["numbers_json"]):
@@ -34,25 +34,8 @@ def predict_five_zodiac(rows):
         appeared.add(get_zodiac_by_number(r["special_number"]))
     for z in ZODIAC_MAP:
         if z not in appeared:
-            cnt[z] += 0.6
+            cnt[z] += 0.5
     
-    # 邻肖加成：上期特别号的左右相邻生肖
-    last_zod = get_zodiac_by_number(rows[0]["special_number"])
-    zodiac_order = ["鼠","牛","虎","兔","龙","蛇","马","羊","猴","鸡","狗","猪"]
-    try:
-        idx = zodiac_order.index(last_zod)
-        neighbors = [zodiac_order[(idx-1)%12], zodiac_order[(idx+1)%12]]
-        for nz in neighbors:
-            cnt[nz] += 0.2
-    except:
-        pass
-    
-    # 对肖加成
-    pair = ZODIAC_PAIR.get(last_zod)
-    if pair:
-        cnt[pair] += 0.3
-    
-    # 最终取top5
     return [z for z, _ in cnt.most_common(5)]
 
 def backtest_five_zodiac(rows, lookback):
