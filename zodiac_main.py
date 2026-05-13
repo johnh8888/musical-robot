@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# zodiac_main.py - 3窗口（8,12,20）纯规则版，三生肖严格3中2
+# zodiac_main.py - 4窗口（8,12,20,30）纯规则版，三生肖严格3中2
 
 import argparse
 import json
@@ -10,7 +10,7 @@ from strategies_zodiac import (
     get_hot_zodiac, get_cold_zodiac
 )
 
-OPTIMAL_WINDOWS = [8, 12, 20]   # 3窗口组合
+OPTIMAL_WINDOWS = [8, 12, 20, 30]   # 4窗口组合
 
 def get_history_rows_as_list(limit=None):
     records = fetch_hk_records_merged(limit=limit, prefer_local=True)
