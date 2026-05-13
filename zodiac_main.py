@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
-# zodiac_main.py - 香港一二三生肖预测（一三肖增强版）
+# zodiac_main.py - 香港一二三生肖预测（一三肖连空压缩强化版）
 import argparse, gzip, json, re, time, urllib.request
 from collections import Counter
 from itertools import combinations
 from typing import List, Dict
 
-# ===================== 生肖映射 =====================
 ZODIAC_MAP = {
     "马": [1,13,25,37,49], "蛇": [2,14,26,38], "龙": [3,15,27,39],
     "兔": [4,16,28,40], "虎": [5,17,29,41], "牛": [6,18,30,42],
@@ -89,36 +88,36 @@ def _parse_nums(value):
     return out
 
 # ===================== 参数 =====================
-CANDIDATE_SINGLE = [4,6,8,10,12,15,18,20,24,30]   # 一肖候选窗口
-CANDIDATE_TWO    = [4,6,8,10,12,15,18,20,24,30,36,42] # 二肖不变
-CANDIDATE_THREE  = [4,6,8,10,12,15,18,20,24,30]   # 三肖候选窗口（无长周期）
+CANDIDATE_SINGLE = [4,6,8,10,12,15,18,20,24,30]
+CANDIDATE_TWO    = [4,6,8,10,12,15,18,20,24,30,36,42]
+CANDIDATE_THREE  = [4,6,8,10,12,15,18,20,24,30]
 
 OPTIMAL_SINGLE = [6,10,12,18]
 OPTIMAL_TWO    = [4,6,8,10,12]
 OPTIMAL_THREE  = [8,10,12,15]
 
-# 一肖增强参数
-SINGLE_BOOST = 3.6                 # 特码加权提升
-SINGLE_MISS_PROTECT = 1            # 连空保护阈值
-SINGLE_PENALTY = 0.15              # 一肖优化惩罚系数（提高）
+# 一肖强化参数
+SINGLE_BOOST = 4.0                 # 继续提高特码权重
+SINGLE_MISS_PROTECT = 1
+SINGLE_PENALTY = 0.2               # 提高惩罚
 
 # 二肖不变
 TWO_BOOST = 3.0
 TWO_MISS_PROTECT = 1
 
-# 三肖增强参数
-THREE_NORMAL_WEIGHT = 0.3          # 正码权重
-THREE_SIGNAL_THRESHOLD = 0.5       # 正码信号阈值
-THREE_COLD_BASE = 1.0              # 冷号基础加票（提高）
+# 三肖强化参数
+THREE_NORMAL_WEIGHT = 0.3
+THREE_SIGNAL_THRESHOLD = 0.5
+THREE_COLD_BASE = 1.2              # 提高冷号基础
 THREE_COLD_STEP = 0.3
-THREE_COLD_MAX = 1.5               # 上限
+THREE_COLD_MAX = 1.8               # 提高上限
 THREE_MISS_PROTECT = 1
-THREE_PENALTY = 0.25               # 三肖优化惩罚系数（提高）
+THREE_PENALTY = 0.3                # 惩罚加大
 
-# 三肖趋势感知参数（与特五肖类似）
+# 三肖趋势感知
 TREND_LOOKBACK = 12
 HOT_OVERHEAT_THRESHOLD = 0.7
-HOT_COLD_MULT = 1.8
+HOT_COLD_MULT = 2.2                # 过热时冷号乘数提高
 COLD_HOT_BOOST = 1.1
 
 def w_weight(w, base=42):
@@ -220,7 +219,6 @@ def predict_all(history, w_s, w_t, w_th):
     for w in w_th:
         for z in pred_three(history, w, use_n, nw):
             vth[z] += w_weight(w, 30)
-    # 加入趋势感知和动态冷号
     om = omission_map(history)
     hot_b, cold_m = three_trend_factor(history)
     for z in om:
@@ -230,7 +228,7 @@ def predict_all(history, w_s, w_t, w_th):
     three = [z for z,_ in vth.most_common(3)]
     return single, two, three
 
-# ===================== 回测 =====================
+# ===================== 回测（包含增强保护） =====================
 def backtest(rows, lookback, w_s, w_t, w_th):
     rev = list(reversed(rows))
     total = min(lookback, len(rev)-20)
@@ -244,54 +242,62 @@ def backtest(rows, lookback, w_s, w_t, w_th):
         win_z = set(get_zodiac(n) for n in actual["numbers"])
         win_z.add(get_zodiac(actual["special_number"]))
         om = omission_map(train)
+        sorted_cold = sorted(om, key=om.get, reverse=True)
 
-        # 一肖（增强保护：保留第1，第2选最冷）
+        # === 一肖保护：连空1期时，从遗漏前3中选一个不在最近3期出现的冷号 ===
         vs = Counter()
         for w in w_s: vs[pred_single(train,w)] += w_weight(w)
         ps = vs.most_common(1)[0][0]
-        if miss_s >= SINGLE_MISS_PROTECT and om:
-            coldest = max(om, key=om.get)
-            # 保留第一名，将预测改为第一名和最冷中的一个（实际上只有一个生肖，直接换为最冷）
-            ps = coldest  # 单生肖直接替换
-        # 统计
+        if miss_s >= SINGLE_MISS_PROTECT:
+            # 获取最近3期出现过的生肖（避免选刚出过的）
+            recent3 = train[-3:] if len(train)>=3 else train
+            appeared_recent = set()
+            for r in recent3:
+                appeared_recent.update(get_zodiac(n) for n in r["numbers"])
+                appeared_recent.add(get_zodiac(r["special_number"]))
+            # 从遗漏前3中选一个未在最近3期出现的
+            for z in sorted_cold[:3]:
+                if z not in appeared_recent:
+                    ps = z
+                    break
+            else:
+                ps = sorted_cold[0]  # 兜底用最冷
         if ps in win_z: hit_s+=1; miss_s=0
         else: miss_s+=1; max_s=max(max_s,miss_s)
 
-        # 二肖（不变）
+        # === 二肖不变 ===
         vt = Counter()
         for w in w_t:
             for z in pred_two(train,w): vt[z] += w_weight(w)
         pt = [z for z,_ in vt.most_common(2)]
-        if miss_t >= TWO_MISS_PROTECT and om:
-            cold = max(om, key=om.get)
+        if miss_t >= TWO_MISS_PROTECT and sorted_cold:
+            cold = sorted_cold[0]
             if cold not in pt: pt[-1] = cold
         if any(z in win_z for z in pt): hit_t+=1; miss_t=0
         else: miss_t+=1; max_t=max(max_t,miss_t)
 
-        # 三肖（增强版）
+        # === 三肖保护：保留第1名，后2名换最冷2个 ===
         use_n, nw = three_normal_signal(train)
         vth = Counter()
         for w in w_th:
             for z in pred_three(train, w, use_n, nw):
                 vth[z] += w_weight(w, 30)
-        # 动态冷号加票
         hot_b, cold_m = three_trend_factor(train)
-        for z in om:
+        for z in sorted_cold:
             bonus = three_cold_bonus(om[z])
             if bonus > 0:
                 vth[z] += bonus * cold_m
         pth = [z for z,_ in vth.most_common(3)]
-        # 连空保护：保留前2，后1换最冷1个（去重）
-        if miss_th >= THREE_MISS_PROTECT and om:
-            coldest1 = max(om, key=om.get)
-            keep = pth[:2]
-            new_cold = [coldest1] if coldest1 not in keep else []
+        if miss_th >= THREE_MISS_PROTECT and len(sorted_cold)>=2:
+            keep = pth[:1]                       # 只保留第一名
+            new_cold = [z for z in sorted_cold[:2] if z != keep[0]]
             pth = keep + new_cold
             while len(pth) < 3:
                 for z,_ in vth.most_common():
-                    if z not in pth: pth.append(z); break
+                    if z not in pth:
+                        pth.append(z)
+                        break
                 else: pth.append("马")
-        # 统计（三肖需至少中2个）
         if sum(1 for z in pth if z in win_z) >= 2: hit_th+=1; miss_th=0
         else: miss_th+=1; max_th=max(max_th,miss_th)
 
