@@ -4,7 +4,6 @@
 import json
 import numpy as np
 import lightgbm as lgb
-from collections import Counter
 from common import fetch_hk_records_merged, get_zodiac_by_number, ZODIAC_MAP, ZODIAC_PAIR
 
 def build_ranking_features(rows, window=30):
@@ -12,9 +11,8 @@ def build_ranking_features(rows, window=30):
     for idx in range(window, len(rows)):
         hist = rows[idx-window:idx]
         target = rows[idx]
-        target_z = get_zodiac_by_number(target["special_number"])  # 只需特别号生肖
+        target_z = get_zodiac_by_number(target["special_number"])
         for z in ZODIAC_MAP:
-            # 特征：基于正码和特别号的历史频率等
             cnt10 = sum(1 for r in hist[:10] for n in r["numbers"] if get_zodiac_by_number(n) == z)
             cnt20 = sum(1 for r in hist[:20] for n in r["numbers"] if get_zodiac_by_number(n) == z)
             special_cnt10 = sum(1 for r in hist[:10] if get_zodiac_by_number(r["special_number"]) == z)
@@ -25,7 +23,6 @@ def build_ranking_features(rows, window=30):
                 omission += 1
             last_sp_z = get_zodiac_by_number(hist[0]["special_number"])
             is_pair = 1 if ZODIAC_PAIR.get(last_sp_z) == z else 0
-            # 正码总数
             total_main = sum(1 for r in hist for n in r["numbers"] if get_zodiac_by_number(n) == z)
             X.append([cnt10, cnt20, special_cnt10, omission, is_pair, total_main])
             y.append(1 if z == target_z else 0)
@@ -52,7 +49,8 @@ def main():
     split = int(len(X) * 0.8)
     X_train, X_val = X[:split], X[split:]
     y_train, y_val = y[:split], y[split:]
-    group_train, group_val = group[:split//12], group[split//12:]
+    group_train = group[:split//12]
+    group_val = group[split//12:]
 
     train_data = lgb.Dataset(X_train, label=y_train, group=group_train)
     val_data = lgb.Dataset(X_val, label=y_val, group=group_val)
