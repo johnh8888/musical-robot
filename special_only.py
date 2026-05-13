@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-# special_only.py - 特五肖6窗口投票版
+# special_only.py - 特五肖3窗口投票版（8,12,20）
 
 import argparse
 import json
 from collections import Counter
 from common import fetch_hk_records_merged, get_zodiac_by_number, next_issue, ZODIAC_MAP, ZODIAC_PAIR
 
-# 使用6窗口（与生肖预测的经典窗口一致）
-WINDOWS = [8, 10, 12, 18, 20, 30]
+# 使用3窗口（与三生肖优化窗口一致）
+WINDOWS = [8, 12, 20]
 
 def get_history_rows_as_list(limit=None):
     records = fetch_hk_records_merged(limit=limit, prefer_local=True)
@@ -40,7 +40,6 @@ def predict_five_zodiac(rows, windows, miss_streak=0):
             votes[z] += 1
     base_top5 = [z for z, _ in votes.most_common(5)]
 
-    # 连空保护（可选）
     if miss_streak >= 2:
         hot_counter = Counter()
         for r in rows[:10]:
@@ -87,7 +86,7 @@ def main():
         latest = rows[0]["issue_no"]
         pred_issue = next_issue(latest)
         print(f"预测期号: {pred_issue}")
-        print(f"\n【特五肖推荐 (6窗口投票)】: {'、'.join(zodiac5)}")
+        print(f"\n【特五肖推荐 (3窗口投票)】: {'、'.join(zodiac5)}")
         print(f"使用窗口: {WINDOWS}")
 
         hit10, miss10 = backtest_five_zodiac(rows, 10, WINDOWS)
