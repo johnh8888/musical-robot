@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# special_only.py - 特五肖（频率+遗漏）
+# special_only.py - 特五肖（正码+特别号频率+遗漏加分）
 
 import argparse
 import json
@@ -20,12 +20,10 @@ def get_history_rows_as_list(limit=None):
 
 def predict_five_zodiac(rows):
     cnt = Counter()
-    # 正码权重0.7，特别号0.3
     for r in rows[:100]:
         for n in json.loads(r["numbers_json"]):
             cnt[get_zodiac_by_number(n)] += 0.7
         cnt[get_zodiac_by_number(r["special_number"])] += 0.3
-    
     # 遗漏加分：最近50期从未出现的生肖加0.5
     appeared = set()
     for r in rows[:50]:
@@ -35,7 +33,6 @@ def predict_five_zodiac(rows):
     for z in ZODIAC_MAP:
         if z not in appeared:
             cnt[z] += 0.5
-    
     return [z for z, _ in cnt.most_common(5)]
 
 def backtest_five_zodiac(rows, lookback):
