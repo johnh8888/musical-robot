@@ -157,4 +157,4 @@ def main():
             print(f"三生肖 {stats100['three_hit_rate']:.1%} 连空{stats100['three_max_miss']}")
 
 if __name__ == "__main__":
-    main() 
+    main()
