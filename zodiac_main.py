@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# zodiac_main.py - 香港一二三生肖预测（一三肖连空压缩强化版）
+# zodiac_main.py - 香港一二三生肖预测（一三肖命中强化版）
 import argparse, gzip, json, re, time, urllib.request
 from collections import Counter
 from itertools import combinations
@@ -97,9 +97,9 @@ OPTIMAL_TWO    = [4,6,8,10,12]
 OPTIMAL_THREE  = [8,10,12,15]
 
 # 一肖强化参数
-SINGLE_BOOST = 4.0                 # 继续提高特码权重
+SINGLE_BOOST = 4.5                 # 特码加权再提高
 SINGLE_MISS_PROTECT = 1
-SINGLE_PENALTY = 0.2               # 提高惩罚
+SINGLE_PENALTY = 0.25              # 惩罚加大
 
 # 二肖不变
 TWO_BOOST = 3.0
@@ -108,16 +108,16 @@ TWO_MISS_PROTECT = 1
 # 三肖强化参数
 THREE_NORMAL_WEIGHT = 0.3
 THREE_SIGNAL_THRESHOLD = 0.5
-THREE_COLD_BASE = 1.2              # 提高冷号基础
+THREE_COLD_BASE = 1.5              # 冷号基础加票大幅提升
 THREE_COLD_STEP = 0.3
-THREE_COLD_MAX = 1.8               # 提高上限
+THREE_COLD_MAX = 2.0               # 上限提高
 THREE_MISS_PROTECT = 1
 THREE_PENALTY = 0.3                # 惩罚加大
 
 # 三肖趋势感知
 TREND_LOOKBACK = 12
 HOT_OVERHEAT_THRESHOLD = 0.7
-HOT_COLD_MULT = 2.2                # 过热时冷号乘数提高
+HOT_COLD_MULT = 2.5                # 过热时冷号乘数提高
 COLD_HOT_BOOST = 1.1
 
 def w_weight(w, base=42):
@@ -244,28 +244,16 @@ def backtest(rows, lookback, w_s, w_t, w_th):
         om = omission_map(train)
         sorted_cold = sorted(om, key=om.get, reverse=True)
 
-        # === 一肖保护：连空1期时，从遗漏前3中选一个不在最近3期出现的冷号 ===
+        # 一肖：连空1期后直接选最冷生肖（无过滤）
         vs = Counter()
         for w in w_s: vs[pred_single(train,w)] += w_weight(w)
         ps = vs.most_common(1)[0][0]
-        if miss_s >= SINGLE_MISS_PROTECT:
-            # 获取最近3期出现过的生肖（避免选刚出过的）
-            recent3 = train[-3:] if len(train)>=3 else train
-            appeared_recent = set()
-            for r in recent3:
-                appeared_recent.update(get_zodiac(n) for n in r["numbers"])
-                appeared_recent.add(get_zodiac(r["special_number"]))
-            # 从遗漏前3中选一个未在最近3期出现的
-            for z in sorted_cold[:3]:
-                if z not in appeared_recent:
-                    ps = z
-                    break
-            else:
-                ps = sorted_cold[0]  # 兜底用最冷
+        if miss_s >= SINGLE_MISS_PROTECT and sorted_cold:
+            ps = sorted_cold[0]   # 直接最冷
         if ps in win_z: hit_s+=1; miss_s=0
         else: miss_s+=1; max_s=max(max_s,miss_s)
 
-        # === 二肖不变 ===
+        # 二肖不变
         vt = Counter()
         for w in w_t:
             for z in pred_two(train,w): vt[z] += w_weight(w)
@@ -276,7 +264,7 @@ def backtest(rows, lookback, w_s, w_t, w_th):
         if any(z in win_z for z in pt): hit_t+=1; miss_t=0
         else: miss_t+=1; max_t=max(max_t,miss_t)
 
-        # === 三肖保护：保留第1名，后2名换最冷2个 ===
+        # 三肖：保护强化，保留第1名，后2名强制换最冷2个
         use_n, nw = three_normal_signal(train)
         vth = Counter()
         for w in w_th:
