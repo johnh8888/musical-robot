@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-# zodiac_main.py - 最终强化版（三生肖保护连空≥1即干预）
+# zodiac_main.py - 三生肖平衡保护（连空≥2干预，组合含对肖）
 
 import argparse
 import json
 from collections import Counter
-from common import fetch_hk_records_merged, get_zodiac_by_number, next_issue
+from common import fetch_hk_records_merged, get_zodiac_by_number, next_issue, ZODIAC_PAIR
 from strategies_zodiac import (
     predict_strong_single, predict_strong_two, predict_strong_three_with_window,
-    get_hot_zodiac, get_second_hot_zodiac, get_cold_zodiac
+    get_hot_zodiac, get_cold_zodiac
 )
 
 DEFAULT_PARAMS = {
@@ -91,23 +91,25 @@ def backtest_zodiac_stats(rows, lookback, params):
         else:
             pred_single = pred_single_raw
 
-        # 二生肖保护（连空≥miss_two_threshold补入最冷）
+        # 二生肖保护
         if miss_two >= miss_two_threshold:
             cold = get_cold_zodiac(train, window=30)
             if cold not in pred_two_raw:
                 pred_two_raw[-1] = cold
         pred_two = pred_two_raw
 
-        # ★ 三生肖强化保护：只要连空≥1就干预，使用二生肖 + 最热 + 次热
-        if miss_three >= 1:
-            hot1 = get_hot_zodiac(train, window=10)
-            hot2 = get_second_hot_zodiac(train, window=10, exclude=hot1)
-            combined = list(dict.fromkeys(pred_two + [hot1, hot2]))
+        # ★ 三生肖保护：连空≥2时，使用“二生肖 + 最热生肖 + 对肖”
+        if miss_three >= 2:
+            hot = get_hot_zodiac(train, window=10)
+            last_special = train[0]["special_number"]
+            last_zod = get_zodiac_by_number(last_special)
+            pair = ZODIAC_PAIR.get(last_zod, "")
+            combined = list(dict.fromkeys(pred_two + [hot, pair]))
             pred_three = combined[:3]
         else:
             pred_three = pred_three_raw[:3]
 
-        # 统计一生肖
+        # 统计
         if pred_single in win_z:
             hits_single += 1
             miss_single = 0
@@ -115,7 +117,6 @@ def backtest_zodiac_stats(rows, lookback, params):
             miss_single += 1
             max_miss_single = max(max_miss_single, miss_single)
 
-        # 统计二生肖
         if any(z in win_z for z in pred_two):
             hits_two += 1
             miss_two = 0
@@ -123,7 +124,6 @@ def backtest_zodiac_stats(rows, lookback, params):
             miss_two += 1
             max_miss_two = max(max_miss_two, miss_two)
 
-        # 统计三生肖（严格中2个）
         hit_cnt = sum(1 for z in pred_three if z in win_z)
         if three_use_strict:
             if hit_cnt >= 2:
