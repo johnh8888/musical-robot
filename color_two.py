@@ -89,7 +89,7 @@ def main():
         return
 
     # 最佳窗口（可调整，也可运行搜索脚本）
-    windows = [6, 10, 30]
+    windows = [10, 18, 20, 25]
 
     if args.show:
         pred = predict_two_colors_hot(colors, windows, miss_streak=0)
