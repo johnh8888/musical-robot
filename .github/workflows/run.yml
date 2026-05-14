@@ -1,12 +1,10 @@
-name: 香港六合彩特二色预测
+name: 自动优化特二色超参数
 
 on:
-  schedule:
-    - cron: '30 13 * * *'   # 每天 UTC 13:30（北京时间 21:30）
   workflow_dispatch:
 
 jobs:
-  predict:
+  optimize:
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -20,12 +18,46 @@ jobs:
       - name: 安装依赖
         run: |
           pip install --upgrade pip
+          pip install optuna
           pip install -r requirements.txt
-      - name: 特二色预测
-        run: python color_two.py --show
+      - name: 运行优化脚本
+        run: python optimize_color_two.py
+      - name: 更新 color_two.py
+        run: |
+          # 读取 best_color_config.json 并替换 color_two.py 中的配置
+          python <<'EOF'
+          import json
+          with open('best_color_config.json') as f:
+              cfg = json.load(f)
+          windows = cfg['windows']
+          weights = cfg['window_weights']
+          miss_factor = cfg['miss_factor']
+          # 读取 color_two.py
+          with open('color_two.py', 'r') as f:
+              lines = f.readlines()
+          new_lines = []
+          for line in lines:
+              if line.strip().startswith('windows ='):
+                  new_lines.append(f"windows = {windows}\n")
+              elif line.strip().startswith('window_weights ='):
+                  new_lines.append(f"window_weights = {weights}\n")
+              elif line.strip().startswith('miss_factor ='):
+                  new_lines.append(f"miss_factor = {miss_factor}\n")
+              else:
+                  new_lines.append(line)
+          with open('color_two.py', 'w') as f:
+              f.writelines(new_lines)
+          print("已更新 color_two.py")
+          EOF
+      - name: 提交更改
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add color_two.py best_color_config.json
+          git commit -m "Auto-optimize color two parameters" || echo "No changes"
+          git push || echo "Push failed"
       - name: 上传结果
         uses: actions/upload-artifact@v4
         with:
-          name: color-two-prediction-logs
-          path: |
-            *.txt
+          name: optimization-result
+          path: best_color_config.json
