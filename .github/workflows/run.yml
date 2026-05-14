@@ -21,10 +21,9 @@ jobs:
           pip install optuna
           pip install -r requirements.txt
       - name: 运行优化脚本
-        run: python optimize_color_two.py
+        run: python optimize_color_two_weights.py
       - name: 更新 color_two.py
         run: |
-          # 读取 best_color_config.json 并替换 color_two.py 中的配置
           python <<'EOF'
           import json
           with open('best_color_config.json') as f:
@@ -32,7 +31,6 @@ jobs:
           windows = cfg['windows']
           weights = cfg['window_weights']
           miss_factor = cfg['miss_factor']
-          # 读取 color_two.py
           with open('color_two.py', 'r') as f:
               lines = f.readlines()
           new_lines = []
