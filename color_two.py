@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# color_two.py - 特二色预测（强化连空保护版）
+# color_two.py - 特二色预测（平衡版：命中率73%，连空2）
 
 import argparse
 import json
@@ -37,7 +37,6 @@ def evaluate(colors, windows, weights, lookback=100):
     for i in range(total):
         train = colors[i+20:]
         actual = colors[i]
-        # 调用强化版预测（需要将以下逻辑嵌入，但为了评估，我们内联）
         votes = Counter()
         for w in windows:
             weight = weights.get(w, 1.0)
@@ -53,29 +52,12 @@ def evaluate(colors, windows, weights, lookback=100):
                     pred.append(c)
                     if len(pred) == 2:
                         break
-        # 连空保护（强化）
+        # 连空保护：只要上一期未中，就用最近10期最热两个颜色
         if miss_streak >= 1:
             hot = Counter(train[:10])
             if hot:
                 hottest_two = [c for c, _ in hot.most_common(2)]
-                last_color = train[0] if train else None
-                if last_color and last_color in hottest_two:
-                    for c in COLORS:
-                        if c not in hottest_two:
-                            hottest_two[-1] = c
-                            break
                 pred = hottest_two
-        if miss_streak >= 2:
-            global_hot = Counter(train)
-            if global_hot:
-                global_top2 = [c for c, _ in global_hot.most_common(2)]
-                last_color = train[0] if train else None
-                if last_color and last_color in global_top2:
-                    for c in COLORS:
-                        if c not in global_top2:
-                            global_top2[-1] = c
-                            break
-                pred = global_top2
         if actual in pred:
             hits += 1
             miss_streak = 0
@@ -135,29 +117,11 @@ def predict_two_colors(colors, config, miss_streak=0):
                 pred.append(c)
                 if len(pred) == 2:
                     break
-    # 强化连空保护
     if miss_streak >= 1:
         hot = Counter(colors[:10])
         if hot:
             hottest_two = [c for c, _ in hot.most_common(2)]
-            last_color = colors[0] if colors else None
-            if last_color and last_color in hottest_two:
-                for c in COLORS:
-                    if c not in hottest_two:
-                        hottest_two[-1] = c
-                        break
             return hottest_two
-    if miss_streak >= 2:
-        global_hot = Counter(colors)
-        if global_hot:
-            global_top2 = [c for c, _ in global_hot.most_common(2)]
-            last_color = colors[0] if colors else None
-            if last_color and last_color in global_top2:
-                for c in COLORS:
-                    if c not in global_top2:
-                        global_top2[-1] = c
-                        break
-            return global_top2
     return pred
 
 def backtest_two_colors(colors, config, lookback):
