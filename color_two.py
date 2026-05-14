@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# color_two.py - 特二色预测（双注与单注分离窗口）
+# color_two.py - 特二色预测（双注4窗口 / 单注2窗口+连空保护）
 
 import argparse
 import json
@@ -27,7 +27,7 @@ def get_history_colors(limit=None):
             colors.append(c)
     return colors
 
-# ---------- 双注模式（4窗口） ----------
+# ---------- 双注模式（4窗口，无连空保护） ----------
 def evaluate_two(colors, windows, weights, lookback=100):
     total = min(lookback, len(colors) - 20)
     if total <= 0:
@@ -53,7 +53,7 @@ def evaluate_two(colors, windows, weights, lookback=100):
                     pred.append(c)
                     if len(pred) == 2:
                         break
-        # 连空保护
+        # 双注也启用简单保护（上一期未中则用热色）
         if miss_streak >= 1:
             hot = Counter(train[:10])
             if hot:
@@ -144,7 +144,7 @@ def backtest_two(colors, config, lookback):
             max_miss = max(max_miss, miss_streak)
     return hits / total, max_miss
 
-# ---------- 单注模式（2窗口） ----------
+# ---------- 单注模式（2窗口，连空保护） ----------
 def evaluate_single(colors, windows, weights, lookback=100):
     total = min(lookback, len(colors) - 20)
     if total <= 0:
@@ -155,19 +155,24 @@ def evaluate_single(colors, windows, weights, lookback=100):
     for i in range(total):
         train = colors[i+20:]
         actual = colors[i]
+        # 投票
         votes = Counter()
         for w in windows:
             weight = weights.get(w, 1.0)
             recent = train[:w]
             freq = Counter(recent)
-            top1 = [c for c, _ in freq.most_common(1)]  # 只取最热一个
+            top1 = [c for c, _ in freq.most_common(1)]
             for c in top1:
                 votes[c] += weight
         if votes:
             pred = votes.most_common(1)[0][0]
         else:
             pred = "红"
-        # 单注可不用连空保护（或可选，这里不加保护以评估真实命中率）
+        # 连空保护：如果上一期未中，则用最近10期最热颜色替换
+        if miss_streak >= 1:
+            hot = Counter(train[:10])
+            if hot:
+                pred = hot.most_common(1)[0][0]
         if actual == pred:
             hits += 1
             miss_streak = 0
@@ -178,7 +183,7 @@ def evaluate_single(colors, windows, weights, lookback=100):
 
 def auto_tune_single(colors):
     print("单注模式：自动搜索最佳参数（随机搜索200次）...")
-    windows = [10, 30]  # 2窗口，可调整候选
+    windows = [6, 20]   # 改用更短期的窗口
     best_hit = 0
     best_max_miss = 999
     best_weights = {w: 0.5 for w in windows}
@@ -224,7 +229,10 @@ def predict_single(colors, config, miss_streak=0):
         pred = votes.most_common(1)[0][0]
     else:
         pred = "红"
-    # 不加连空保护，直接返回
+    if miss_streak >= 1:
+        hot = Counter(colors[:10])
+        if hot:
+            pred = hot.most_common(1)[0][0]
     return pred
 
 def backtest_single(colors, config, lookback):
@@ -237,7 +245,7 @@ def backtest_single(colors, config, lookback):
     for i in range(total):
         train = colors[i+20:]
         actual = colors[i]
-        pred = predict_single(train, config)
+        pred = predict_single(train, config, miss_streak)
         if actual == pred:
             hits += 1
             miss_streak = 0
@@ -264,7 +272,7 @@ def main():
             config = auto_tune_single(colors)
         else:
             print("已加载单注最佳参数配置")
-        pred = predict_single(colors, config)
+        pred = predict_single(colors, config, miss_streak=0)
         records = fetch_hk_records_merged(limit=1, prefer_local=True)
         latest_issue = records[0]["issue_no"] if records else ""
         print(f"预测期号: {next_issue(latest_issue)}")
@@ -277,14 +285,14 @@ def main():
             print(f"\n近10期回测（单注）: 命中率 {hit10:.1%}，最大连空 {miss10}")
             print(f"近100期回测（单注）: 命中率 {hit100:.1%}，最大连空 {miss100}")
     else:
-        # 双注模式（默认）
+        # 双注模式
         config = load_config_two()
         if config is None:
             config = auto_tune_two(colors)
         else:
             print("已加载双注最佳参数配置")
         pred_two = predict_two(colors, config, miss_streak=0)
-        pred_single = pred_two[0]  # 顺便显示单注
+        pred_single = pred_two[0]  # 顺便显示单注参考
         records = fetch_hk_records_merged(limit=1, prefer_local=True)
         latest_issue = records[0]["issue_no"] if records else ""
         print(f"预测期号: {next_issue(latest_issue)}")
