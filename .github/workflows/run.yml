@@ -1,4 +1,4 @@
-name: 香港六合彩波色预测
+name: 香港六合彩特二色预测
 
 on:
   schedule:
@@ -21,11 +21,11 @@ jobs:
         run: |
           pip install --upgrade pip
           pip install -r requirements.txt
-      - name: 波色预测
-        run: python color_only.py --show
+      - name: 特二色预测
+        run: python color_two.py --show
       - name: 上传结果
         uses: actions/upload-artifact@v4
         with:
-          name: color-prediction-logs
+          name: color-two-prediction-logs
           path: |
             *.txt
