@@ -1,23 +1,31 @@
-name: 自动搜索波色最佳窗口
+name: 香港六合彩波色预测
 
 on:
+  schedule:
+    - cron: '30 13 * * *'   # 每天 UTC 13:30（北京时间 21:30）
   workflow_dispatch:
 
 jobs:
-  search:
+  predict:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
       - uses: actions/setup-python@v5
         with:
           python-version: '3.10'
       - name: 安装依赖
-        run: pip install -r requirements.txt
-      - name: 运行搜索脚本
-        run: python search_color_windows.py
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: 波色预测
+        run: python color_only.py --show
       - name: 上传结果
         uses: actions/upload-artifact@v4
         with:
-          name: color-window-search-result
+          name: color-prediction-logs
           path: |
             *.txt
