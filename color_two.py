@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# color_two.py - 特二色预测（推荐最热两种颜色 + 激进连空保护）
+# color_two.py - 特二色增强版（遗漏加分 + 窗口加权）
 
 import argparse
 from collections import Counter
@@ -26,14 +26,48 @@ def get_history_colors(limit=None):
     colors = [get_color_by_number(r["special_number"]) for r in records]
     return colors
 
-def predict_two_colors(colors, windows, miss_streak=0):
+def predict_two_colors_advanced(colors, windows, window_weights=None, miss_streak=0):
+    """
+    增强预测：每个窗口内计算颜色得分 = 频率分 + 遗漏分，然后加权投票。
+    窗口权重默认为 1/window（越小权重越高）
+    """
+    if window_weights is None:
+        # 默认权重：窗口越小权重越高，例如窗口6权重1.0，窗口30权重0.2
+        max_w = max(windows)
+        window_weights = {w: (max_w / w) for w in windows}
+    # 归一化权重（可选）
+    total_weight = sum(window_weights.values())
+    if total_weight > 0:
+        window_weights = {w: v / total_weight for w, v in window_weights.items()}
+
     votes = Counter()
     for w in windows:
-        recent = colors[:w]
-        cnt = Counter(recent)
-        top2 = [c for c, _ in cnt.most_common(2)]
-        for c in top2:
-            votes[c] += 1
+        recent = colors[:w]  # 降序，最新在前
+        # 频率分：每种颜色在窗口内出现的次数
+        freq = Counter(recent)
+        # 遗漏分：每种颜色距离上一次出现的间隔（值越大表示越冷）
+        omission = {c: 0 for c in COLORS}
+        for i, col in enumerate(recent):
+            if omission[col] == 0:
+                omission[col] = i + 1  # 最近一次出现的位置（1-based）
+        # 未出现的颜色遗漏设为窗口长度
+        for c in COLORS:
+            if omission[c] == 0:
+                omission[c] = w
+        # 归一化遗漏分（使得遗漏越大得分越高，最大为1）
+        max_omit = max(omission.values())
+        omit_score = {c: (omit / max_omit) for c, omit in omission.items()}
+        # 综合得分 = 频率分（相对值） + 0.5 * 遗漏分
+        max_freq = max(freq.values()) if freq else 1
+        total_score = {}
+        for c in COLORS:
+            freq_score = freq.get(c, 0) / max_freq
+            total_score[c] = freq_score + 0.5 * omit_score[c]
+        # 取该窗口下得分最高的两个颜色
+        best_two = sorted(total_score, key=total_score.get, reverse=True)[:2]
+        for c in best_two:
+            votes[c] += window_weights[w]
+    # 综合投票，取总分最高的两个颜色
     recommended = [c for c, _ in votes.most_common(2)]
     if len(recommended) < 2:
         for c in COLORS:
@@ -41,7 +75,7 @@ def predict_two_colors(colors, windows, miss_streak=0):
                 recommended.append(c)
                 if len(recommended) == 2:
                     break
-    # 激进保护：只要上一期未中（miss_streak >= 1），就强制使用最近10期最热两种颜色
+    # 连空保护（激进版：只要上期未中就干预）
     if miss_streak >= 1:
         hot_counter = Counter(colors[:10])
         if hot_counter:
@@ -49,7 +83,7 @@ def predict_two_colors(colors, windows, miss_streak=0):
             return hottest_two
     return recommended
 
-def backtest_two_colors(colors, lookback, windows):
+def backtest_two_colors(colors, lookback, windows, window_weights=None):
     total = min(lookback, len(colors) - 20)
     if total <= 0:
         return None, None
@@ -59,7 +93,7 @@ def backtest_two_colors(colors, lookback, windows):
     for i in range(total):
         train = colors[i+20:]
         actual = colors[i]
-        pred = predict_two_colors(train, windows, miss_streak)
+        pred = predict_two_colors_advanced(train, windows, window_weights, miss_streak)
         if actual in pred:
             hits += 1
             miss_streak = 0
@@ -78,19 +112,22 @@ def main():
         print("数据获取失败")
         return
 
-    # 使用搜索到的最佳窗口
+    # 使用之前搜索到的最佳窗口
     windows = [10, 18, 20, 25]
+    # 可自定义窗口权重（可选），默认使用逆窗口大小
+    # window_weights = {10:1.0, 18:0.6, 20:0.5, 25:0.4}  # 示例
+    window_weights = None  # 使用默认权重（窗口越小权重越高）
 
     if args.show:
-        pred = predict_two_colors(colors, windows, miss_streak=0)
+        pred = predict_two_colors_advanced(colors, windows, window_weights, miss_streak=0)
         records = fetch_hk_records_merged(limit=1, prefer_local=True)
         latest_issue = records[0]["issue_no"] if records else ""
         print(f"预测期号: {next_issue(latest_issue)}")
         print(f"特二色推荐: {'、'.join(pred)}")
         print(f"使用窗口: {windows}")
 
-        hit10, miss10 = backtest_two_colors(colors, 10, windows)
-        hit100, miss100 = backtest_two_colors(colors, 100, windows)
+        hit10, miss10 = backtest_two_colors(colors, 10, windows, window_weights)
+        hit100, miss100 = backtest_two_colors(colors, 100, windows, window_weights)
         if hit10 is not None:
             print(f"\n近10期回测：特二色命中率 {hit10:.1%}，最大连空 {miss10}")
             print(f"近100期回测：特二色命中率 {hit100:.1%}，最大连空 {miss100}")
