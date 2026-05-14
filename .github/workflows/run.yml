@@ -1,4 +1,4 @@
-name: 香港六合彩特二色预测
+name: 香港六合彩特二色预测（双注模式）
 
 on:
   schedule:
@@ -21,7 +21,7 @@ jobs:
         run: |
           pip install --upgrade pip
           pip install -r requirements.txt
-      - name: 特二色预测
+      - name: 特二色预测（双注）
         run: python color_two.py --show
       - name: 上传结果
         uses: actions/upload-artifact@v4
