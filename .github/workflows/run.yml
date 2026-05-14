@@ -1,10 +1,10 @@
-name: 自动优化特二色超参数
+name: 自动调参特二色
 
 on:
   workflow_dispatch:
 
 jobs:
-  optimize:
+  tune:
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -18,10 +18,9 @@ jobs:
       - name: 安装依赖
         run: |
           pip install --upgrade pip
-          pip install optuna
           pip install -r requirements.txt
-      - name: 运行优化脚本
-        run: python optimize_color_two_weights.py
+      - name: 运行调参脚本
+        run: python auto_tune_color_two.py
       - name: 更新 color_two.py
         run: |
           python <<'EOF'
@@ -52,10 +51,10 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add color_two.py best_color_config.json
-          git commit -m "Auto-optimize color two parameters" || echo "No changes"
+          git commit -m "Auto-tune color two parameters" || echo "No changes"
           git push || echo "Push failed"
       - name: 上传结果
         uses: actions/upload-artifact@v4
         with:
-          name: optimization-result
+          name: tuning-result
           path: best_color_config.json
