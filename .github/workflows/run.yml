@@ -1,10 +1,12 @@
-name: 自动搜索特二色最佳窗口
+name: 香港六合彩特二色预测
 
 on:
+  schedule:
+    - cron: '30 13 * * *'   # 每天 UTC 13:30（北京时间 21:30）
   workflow_dispatch:
 
 jobs:
-  search:
+  predict:
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -19,23 +21,11 @@ jobs:
         run: |
           pip install --upgrade pip
           pip install -r requirements.txt
-      - name: 运行搜索脚本
-        id: search
-        run: |
-          python search_color_two_windows.py > result.txt
-          cat result.txt
-          BEST_WINDOWS=$(grep "最佳窗口组合" result.txt | sed -n 's/.*: \[\(.*\)\]/\1/p')
-          echo "best_windows=$BEST_WINDOWS" >> $GITHUB_OUTPUT
-      - name: 更新 color_two.py 中的窗口
-        run: |
-          sed -i "s/windows = \[.*\]/windows = [${{ steps.search.outputs.best_windows }}]/" color_two.py
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add color_two.py
-          git commit -m "Auto-update best windows for color_two" || echo "No changes"
-          git push || echo "Push failed"
+      - name: 特二色预测
+        run: python color_two.py --show
       - name: 上传结果
         uses: actions/upload-artifact@v4
         with:
-          name: color-two-search-result
-          path: result.txt
+          name: color-two-prediction-logs
+          path: |
+            *.txt
