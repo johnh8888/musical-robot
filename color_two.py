@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# color_two.py - 特二色预测（支持双注/单注模式）
+# color_two.py - 特二色预测（支持双注/单注模式，自动调参）
 
 import argparse
 import json
@@ -40,7 +40,6 @@ def evaluate(colors, windows, weights, lookback=100):
     for i in range(total):
         train = colors[i+20:]
         actual = colors[i]
-        # 投票
         votes = Counter()
         for w in windows:
             weight = weights.get(w, 1.0)
@@ -56,52 +55,44 @@ def evaluate(colors, windows, weights, lookback=100):
                     pred_two.append(c)
                     if len(pred_two) == 2:
                         break
-        # 单注取第一个
         pred_single = pred_two[0]
-        # 连空保护（仅双注使用，单注不保护）
+        # 连空保护（仅双注使用）
         if miss_streak_two >= 1:
             hot = Counter(train[:10])
             if hot:
                 hottest_two = [c for c, _ in hot.most_common(2)]
                 pred_two = hottest_two
                 pred_single = pred_two[0]
-        # 双注命中
         if actual in pred_two:
             hits_two += 1
             miss_streak_two = 0
         else:
             miss_streak_two += 1
             max_miss_two = max(max_miss_two, miss_streak_two)
-        # 单注命中
         if actual == pred_single:
             hits_single += 1
             miss_streak_single = 0
         else:
             miss_streak_single += 1
             max_miss_single = max(max_miss_single, miss_streak_single)
-    return (hits_two/total, max_miss_two, hits_single/total, max_miss_single)
+    return hits_two/total, max_miss_two, hits_single/total, max_miss_single
 
 def auto_tune(colors):
     print("首次运行，正在自动搜索最佳参数（随机搜索200次）...")
     windows = [10, 18, 20, 25]
     best_hit_two = 0
     best_max_miss_two = 999
-    best_hit_single = 0
-    best_max_miss_single = 999
     best_weights = {w: 0.25 for w in windows}
     for _ in range(200):
         raw_weights = [random.uniform(0.1, 1.0) for _ in windows]
         total = sum(raw_weights)
         weights = {w: raw_weights[i]/total for i, w in enumerate(windows)}
-        hit_two, max_miss_two, hit_single, max_miss_single = evaluate(colors, windows, weights, lookback=100)
-        # 优先优化双注命中率（可调整）
+        hit_two, max_miss_two, _, _ = evaluate(colors, windows, weights, lookback=100)
         if hit_two > best_hit_two or (hit_two == best_hit_two and max_miss_two < best_max_miss_two):
             best_hit_two = hit_two
             best_max_miss_two = max_miss_two
-            best_hit_single = hit_single
-            best_max_miss_single = max_miss_single
             best_weights = weights
-    print(f"搜索完成！双注命中率: {best_hit_two:.1%}, 连空 {best_max_miss_two}; 单注命中率: {best_hit_single:.1%}, 连空 {best_max_miss_single}")
+    print(f"搜索完成！双注命中率: {best_hit_two:.1%}, 连空 {best_max_miss_two}")
     config = {
         "windows": windows,
         "window_weights": {str(k): v for k, v in best_weights.items()}
@@ -144,7 +135,7 @@ def predict_two_colors(colors, config, miss_streak=0):
             return hottest_two
     return pred
 
-def backtest_two_colors(colors, config, lookback):
+def backtest(colors, config, lookback):
     total = min(lookback, len(colors) - 20)
     if total <= 0:
         return 0, 0, 0, 0
@@ -159,21 +150,19 @@ def backtest_two_colors(colors, config, lookback):
         actual = colors[i]
         pred_two = predict_two_colors(train, config, miss_streak_two)
         pred_single = pred_two[0]
-        # 双注
         if actual in pred_two:
             hits_two += 1
             miss_streak_two = 0
         else:
             miss_streak_two += 1
             max_miss_two = max(max_miss_two, miss_streak_two)
-        # 单注
         if actual == pred_single:
             hits_single += 1
             miss_streak_single = 0
         else:
             miss_streak_single += 1
             max_miss_single = max(max_miss_single, miss_streak_single)
-    return (hits_two/total, max_miss_two, hits_single/total, max_miss_single)
+    return hits_two/total, max_miss_two, hits_single/total, max_miss_single
 
 def main():
     parser = argparse.ArgumentParser()
@@ -193,7 +182,6 @@ def main():
 
     if args.show:
         if args.single:
-            # 单注模式
             pred_two = predict_two_colors(colors, config, miss_streak=0)
             pred_single = pred_two[0]
             records = fetch_hk_records_merged(limit=1, prefer_local=True)
@@ -203,13 +191,12 @@ def main():
             print(f"使用窗口: {config['windows']}")
             print(f"窗口权重: {config['window_weights']}")
 
-            hit10_two, miss10_two, hit10_single, miss10_single = backtest_two_colors(colors, config, 10)
-            hit100_two, miss100_two, hit100_single, miss100_single = backtest_two_colors(colors, config, 100)
+            hit10_two, miss10_two, hit10_single, miss10_single = backtest(colors, config, 10)
+            hit100_two, miss100_two, hit100_single, miss100_single = backtest(colors, config, 100)
             print(f"\n近10期回测（单注）: 命中率 {hit10_single:.1%}，最大连空 {miss10_single}")
             print(f"近100期回测（单注）: 命中率 {hit100_single:.1%}，最大连空 {miss100_single}")
             print(f"\n双注参考: 近100期命中率 {hit100_two:.1%}，最大连空 {miss100_two}")
         else:
-            # 双注模式
             pred = predict_two_colors(colors, config, miss_streak=0)
             records = fetch_hk_records_merged(limit=1, prefer_local=True)
             latest_issue = records[0]["issue_no"] if records else ""
@@ -218,8 +205,8 @@ def main():
             print(f"使用窗口: {config['windows']}")
             print(f"窗口权重: {config['window_weights']}")
 
-            hit10, miss10, _, _ = backtest_two_colors(colors, config, 10)
-            hit100, miss100, _, _ = backtest_two_colors(colors, config, 100)
+            hit10, miss10, _, _ = backtest(colors, config, 10)
+            hit100, miss100, _, _ = backtest(colors, config, 100)
             if hit10 is not None:
                 print(f"\n近10期回测（双注）: 命中率 {hit10:.1%}，最大连空 {miss10}")
                 print(f"近100期回测（双注）: 命中率 {hit100:.1%}，最大连空 {miss100}")
