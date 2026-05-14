@@ -1,8 +1,8 @@
-name: 香港六合彩预测 (纯规则版)
+name: 香港六合彩波色预测
 
 on:
   schedule:
-    - cron: '30 13 * * *'
+    - cron: '30 13 * * *'   # 每天 UTC 13:30（北京时间 21:30）
   workflow_dispatch:
 
 jobs:
@@ -21,13 +21,11 @@ jobs:
         run: |
           pip install --upgrade pip
           pip install -r requirements.txt
-      - name: 一二三生肖预测
-        run: python zodiac_main.py --show
-      - name: 特五肖预测
-        run: python special_only.py --show
+      - name: 波色预测
+        run: python color_only.py --show
       - name: 上传结果
         uses: actions/upload-artifact@v4
         with:
-          name: prediction-logs
+          name: color-prediction-logs
           path: |
             *.txt
