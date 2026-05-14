@@ -12,27 +12,37 @@ jobs:
       - uses: actions/checkout@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
+
       - uses: actions/setup-python@v5
         with:
           python-version: '3.10'
+
       - name: 安装依赖
-        run: pip install -r requirements.txt
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
       - name: 运行搜索脚本
         id: search
         run: |
-          python search_color_two_best_windows.py > result.txt
+          python search_color_two_windows.py > result.txt
+          cat result.txt
+          # 提取最佳窗口列表，例如 "[6, 10, 30]"
           BEST_WINDOWS=$(grep "最佳窗口组合" result.txt | sed -n 's/.*: \[\(.*\)\]/\1/p')
           echo "best_windows=$BEST_WINDOWS" >> $GITHUB_OUTPUT
-      - name: 更新 color_two.py
+
+      - name: 更新 color_two.py 中的窗口
         run: |
+          # 将 windows = [...] 替换为新的窗口列表
           sed -i "s/windows = \[.*\]/windows = [${{ steps.search.outputs.best_windows }}]/" color_two.py
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add color_two.py
           git commit -m "Auto-update best windows for color_two" || echo "No changes"
           git push || echo "Push failed"
+
       - name: 上传结果
         uses: actions/upload-artifact@v4
         with:
-          name: search-result
+          name: color-two-search-result
           path: result.txt
