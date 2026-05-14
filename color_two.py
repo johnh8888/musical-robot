@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# color_two.py - 特二色预测（支持双注/单注模式，自动调参）
+# color_two.py - 特二色预测（同时显示双注和单注）
 
 import argparse
 import json
@@ -167,7 +167,6 @@ def backtest(colors, config, lookback):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--show", action="store_true")
-    parser.add_argument("--single", action="store_true", help="只输出单个颜色（最热）并回测单注性能")
     args = parser.parse_args()
     colors = get_history_colors(limit=None)
     if not colors:
@@ -181,35 +180,25 @@ def main():
         print("已加载最佳参数配置")
 
     if args.show:
-        if args.single:
-            pred_two = predict_two_colors(colors, config, miss_streak=0)
-            pred_single = pred_two[0]
-            records = fetch_hk_records_merged(limit=1, prefer_local=True)
-            latest_issue = records[0]["issue_no"] if records else ""
-            print(f"预测期号: {next_issue(latest_issue)}")
-            print(f"特一色推荐（最热）: {pred_single}")
-            print(f"使用窗口: {config['windows']}")
-            print(f"窗口权重: {config['window_weights']}")
+        # 获取当前预测
+        pred_two = predict_two_colors(colors, config, miss_streak=0)
+        pred_single = pred_two[0]
+        records = fetch_hk_records_merged(limit=1, prefer_local=True)
+        latest_issue = records[0]["issue_no"] if records else ""
+        print(f"预测期号: {next_issue(latest_issue)}")
+        print(f"双注推荐（两个颜色）: {'、'.join(pred_two)}")
+        print(f"单注推荐（最热颜色）: {pred_single}")
+        print(f"使用窗口: {config['windows']}")
+        print(f"窗口权重: {config['window_weights']}")
 
-            hit10_two, miss10_two, hit10_single, miss10_single = backtest(colors, config, 10)
-            hit100_two, miss100_two, hit100_single, miss100_single = backtest(colors, config, 100)
-            print(f"\n近10期回测（单注）: 命中率 {hit10_single:.1%}，最大连空 {miss10_single}")
-            print(f"近100期回测（单注）: 命中率 {hit100_single:.1%}，最大连空 {miss100_single}")
-            print(f"\n双注参考: 近100期命中率 {hit100_two:.1%}，最大连空 {miss100_two}")
-        else:
-            pred = predict_two_colors(colors, config, miss_streak=0)
-            records = fetch_hk_records_merged(limit=1, prefer_local=True)
-            latest_issue = records[0]["issue_no"] if records else ""
-            print(f"预测期号: {next_issue(latest_issue)}")
-            print(f"特二色推荐: {'、'.join(pred)}")
-            print(f"使用窗口: {config['windows']}")
-            print(f"窗口权重: {config['window_weights']}")
-
-            hit10, miss10, _, _ = backtest(colors, config, 10)
-            hit100, miss100, _, _ = backtest(colors, config, 100)
-            if hit10 is not None:
-                print(f"\n近10期回测（双注）: 命中率 {hit10:.1%}，最大连空 {miss10}")
-                print(f"近100期回测（双注）: 命中率 {hit100:.1%}，最大连空 {miss100}")
+        # 回测数据
+        hit10_two, miss10_two, hit10_single, miss10_single = backtest(colors, config, 10)
+        hit100_two, miss100_two, hit100_single, miss100_single = backtest(colors, config, 100)
+        if hit10_two is not None:
+            print(f"\n近10期回测：双注命中率 {hit10_two:.1%}，最大连空 {miss10_two}")
+            print(f"           单注命中率 {hit10_single:.1%}，最大连空 {miss10_single}")
+            print(f"近100期回测：双注命中率 {hit100_two:.1%}，最大连空 {miss100_two}")
+            print(f"           单注命中率 {hit100_single:.1%}，最大连空 {miss100_single}")
 
 if __name__ == "__main__":
     main()
