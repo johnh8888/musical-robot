@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# color_two.py - 预测特别号码的两种颜色（排除一种颜色），高命中率
+# color_two.py - 特二色预测（推荐最热两种颜色 + 连空保护）
 
 import argparse
 from collections import Counter
@@ -28,25 +28,36 @@ def get_history_colors(limit=None):
         colors.append(get_color_by_number(r["special_number"]))
     return colors
 
-def predict_two_colors(colors, windows):
+def predict_two_colors_hot(colors, windows, miss_streak=0):
     """
-    预测两种颜色（排除最不可能的一种颜色）
-    策略：多窗口投票，统计每个窗口下出现最少的颜色，综合投票后排除一种颜色
+    直接预测最热的两种颜色（每个窗口内取前2名，综合投票）
+    连空保护：如果连续2期未中，则强制使用最近10期最热的两种颜色
     """
-    exclude_votes = Counter()
+    votes = Counter()
     for w in windows:
         recent = colors[:w]
         cnt = Counter(recent)
-        if cnt:
-            min_count = min(cnt.values())
-            least_common = [c for c, v in cnt.items() if v == min_count]
-            exclude = least_common[0]   # 并列时取第一个
-        else:
-            exclude = "红"
-        exclude_votes[exclude] += 1
-    exclude_color = exclude_votes.most_common(1)[0][0]
-    recommended = [c for c in COLORS if c != exclude_color]
-    return recommended, exclude_color
+        # 取该窗口下出现最多的2个颜色（如果不足2个，全部取）
+        top2 = [c for c, _ in cnt.most_common(2)]
+        for c in top2:
+            votes[c] += 1
+    # 综合投票，取前2
+    recommended = [c for c, _ in votes.most_common(2)]
+    # 如果推荐结果不足2个（理论上不会），补全
+    if len(recommended) < 2:
+        for c in COLORS:
+            if c not in recommended:
+                recommended.append(c)
+                if len(recommended) == 2:
+                    break
+
+    # 连空保护：如果上两期都未中，则用最近10期最热的两种颜色替换
+    if miss_streak >= 2:
+        hot_counter = Counter(colors[:10])
+        if hot_counter:
+            hottest_two = [c for c, _ in hot_counter.most_common(2)]
+            return hottest_two
+    return recommended
 
 def backtest_two_colors(colors, lookback, windows):
     total = min(lookback, len(colors) - 20)
@@ -58,8 +69,8 @@ def backtest_two_colors(colors, lookback, windows):
     for i in range(total):
         train = colors[i+20:]
         actual = colors[i]
-        recommended, _ = predict_two_colors(train, windows)
-        if actual in recommended:
+        pred = predict_two_colors_hot(train, windows, miss_streak)
+        if actual in pred:
             hits += 1
             miss_streak = 0
         else:
@@ -77,15 +88,15 @@ def main():
         print("数据获取失败")
         return
 
-    # 使用最佳窗口（可调整）
+    # 最佳窗口（可调整，也可运行搜索脚本）
     windows = [6, 10, 30]
 
     if args.show:
-        recommended, exclude = predict_two_colors(colors, windows)
+        pred = predict_two_colors_hot(colors, windows, miss_streak=0)
         records = fetch_hk_records_merged(limit=1, prefer_local=True)
         latest_issue = records[0]["issue_no"] if records else ""
         print(f"预测期号: {next_issue(latest_issue)}")
-        print(f"特二色推荐: {'、'.join(recommended)} (排除: {exclude})")
+        print(f"特二色推荐: {'、'.join(pred)}")
         print(f"使用窗口: {windows}")
 
         hit10, miss10 = backtest_two_colors(colors, 10, windows)
