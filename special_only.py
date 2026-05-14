@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# special_only.py - 优化稳定版特五肖 (v2)
+# special_only.py - 特五肖 v3（优化版）
 
 import gzip
 import json
@@ -19,26 +19,26 @@ ZODIAC_MAP = {
 
 ZODIAC_LIST = list(ZODIAC_MAP.keys())
 
-# 波色定义
 COLOR_MAP = {
     "红": [1,2,7,8,12,13,18,19,23,24,29,30,34,35,40,41,45,46],
     "蓝": [3,4,9,10,14,15,20,21,25,26,31,32,36,37,42,43,47,48],
     "绿": [5,6,11,16,17,22,27,28,33,38,39,44,49]
 }
 
-DECAY_ALPHA = 0.92   # 略微调低，增强近期影响
+DECAY_ALPHA = 0.89
 
 def get_zodiac(n):
     for z, nums in ZODIAC_MAP.items():
-        if n in nums:
-            return z
+        if n in nums: return z
     return "马"
 
 def get_color(n):
     for c, nums in COLOR_MAP.items():
-        if n in nums:
-            return c
+        if n in nums: return c
     return "红"
+
+def is_big(n): return n > 24
+def is_odd(n): return n % 2 == 1
 
 def decay(idx):
     return DECAY_ALPHA ** idx
@@ -46,32 +46,17 @@ def decay(idx):
 def omission_map(rows):
     om = {z: 0 for z in ZODIAC_LIST}
     for r in reversed(rows):
-        sp = get_zodiac(r["special_number"])
+        appeared = {get_zodiac(n) for n in r["numbers"] + [r["special_number"]]}
         for z in ZODIAC_LIST:
-            if z == sp:
-                om[z] = 0
-            else:
-                om[z] += 1
+            om[z] = 0 if z in appeared else om[z] + 1
     return om
 
 def parse_nums(value):
-    out = []
-    for t in value.replace("，", ",").split(","):
-        t = t.strip()
-        if t and t.isdigit():
-            n = int(t)
-            if 1 <= n <= 49:
-                out.append(n)
-    return out
+    return [int(t) for t in re.split(r'[，,]', value) if t.strip().isdigit() and 1 <= int(t.strip()) <= 49]
 
-def fetch_hk_online(limit=150):
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        "Accept": "application/json",
-        "Referer": "https://marksix6.net/"
-    }
+def fetch_hk_online(limit=180):
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
     req = urllib.request.Request(API_URL, headers=headers)
-    
     for _ in range(3):
         try:
             with urllib.request.urlopen(req, timeout=15) as resp:
@@ -79,125 +64,98 @@ def fetch_hk_online(limit=150):
                 if "gzip" in resp.headers.get("Content-Encoding", "").lower():
                     raw = gzip.decompress(raw)
                 data = json.loads(raw.decode("utf-8"))
-
                 rows = []
                 for item in data.get("lottery_data", []):
-                    if "香港" not in item.get("name", "") and "六合彩" not in item.get("name", ""):
-                        continue
+                    if not any(x in item.get("name","") for x in ["香港","六合彩"]): continue
                     for line in item.get("history", []):
                         m = re.match(r"(\d{7})\s*期[：:]\s*([\d,，]+)", line)
-                        if not m:
-                            continue
+                        if not m: continue
                         nums = parse_nums(m.group(2))
-                        if len(nums) < 7:
-                            continue
-                        raw_issue = m.group(1)
-                        y = raw_issue[2:4]
-                        s = str(int(raw_issue[4:]))
-                        issue_no = f"{y}/{s.zfill(3)}"
-                        rows.append({
-                            "issue_no": issue_no,
-                            "numbers": nums[:6],
-                            "special_number": nums[6]
-                        })
-                rows = sorted(rows, key=lambda x: x["issue_no"], reverse=True)
-                return rows[:limit]
-        except Exception as e:
+                        if len(nums) < 7: continue
+                        issue_no = f"{m.group(1)[2:4]}/{int(m.group(1)[4:]):03d}"
+                        rows.append({"issue_no": issue_no, "numbers": nums[:6], "special_number": nums[6]})
+                return sorted(rows, key=lambda x: x["issue_no"], reverse=True)[:limit]
+        except:
             time.sleep(2)
-    print("⚠️ 数据获取失败，使用备用方案或稍后重试")
+    print("⚠️ 数据获取失败")
     return []
 
 def stable_score(history, miss_count=0):
     score = Counter()
-    recent = history[-40:]   # 扩大历史参考
+    recent = history[-50:]
 
-    # 1. 近期加强权重
-    for idx, r in enumerate(reversed(recent[-5:])):
+    # 多窗口加权
+    for idx, r in enumerate(reversed(recent[-6:])):
         z = get_zodiac(r["special_number"])
-        score[z] += 0.55 * decay(idx)
+        score[z] += 0.52 * decay(idx)
 
-    for idx, r in enumerate(reversed(recent[-10:])):
+    for idx, r in enumerate(reversed(recent[-15:])):
         z = get_zodiac(r["special_number"])
-        score[z] += 0.28 * decay(idx)
+        score[z] += 0.25 * decay(idx)
 
-    for idx, r in enumerate(reversed(recent[-20:])):
-        z = get_zodiac(r["special_number"])
-        score[z] += 0.12 * decay(idx)
+    # 波色 + 大小单双趋势
+    recent_sp = [r["special_number"] for r in recent[-12:]]
+    dom_color = Counter(get_color(n) for n in recent_sp).most_common(1)[0][0]
+    big_count = sum(1 for n in recent_sp if is_big(n))
+    odd_count = sum(1 for n in recent_sp if is_odd(n))
 
-    # 2. 波色趋势奖励
-    colors = [get_color(r["special_number"]) for r in recent[-8:]]
-    color_count = Counter(colors)
-    dominant_color = color_count.most_common(1)[0][0] if color_count else "红"
-    
     for z in ZODIAC_LIST:
-        # 预测生肖对应的波色若为主流色则加分
-        sample_num = ZODIAC_MAP[z][0]
-        if get_color(sample_num) == dominant_color:
-            score[z] += 0.22
+        sample = ZODIAC_MAP[z][0]
+        if get_color(sample) == dom_color:
+            score[z] += 0.26
+        if (is_big(sample) and big_count > 6) or (not is_big(sample) and big_count <= 6):
+            score[z] += 0.12
+        if (is_odd(sample) and odd_count > 6) or (not is_odd(sample) and odd_count <= 6):
+            score[z] += 0.10
 
-    # 3. 遗漏 + 冷号
+    # 遗漏 + 冷号
     om = omission_map(history)
     for z in ZODIAC_LIST:
-        score[z] += min(om[z] * 0.045, 0.55) * 0.11
+        score[z] += min(om[z] * 0.06, 0.72) * 0.15
 
-    # 冷号额外加成
-    if miss_count >= 2:
-        cold = sorted(om.items(), key=lambda x: x[1], reverse=True)[:3]
-        for z, _ in cold:
-            score[z] += 0.20
+    if miss_count >= 3:
+        for z, _ in sorted(om.items(), key=lambda x: x[1], reverse=True)[:3]:
+            score[z] += 0.22
 
     return score
 
 def recommend(history, miss_count=0):
     score = stable_score(history, miss_count)
-    ranked = [z for z, _ in score.most_common()]
-    
-    # 优先取前3热 + 1暖 + 1冷
-    final = []
-    for z in ranked[:4] + ranked[-2:]:
-        if z not in final:
-            final.append(z)
-    return final[:5]
+    ranked = [z for z,_ in score.most_common()]
+    final = ranked[:4] + ranked[-3:]
+    seen = set()
+    return [z for z in final if not (z in seen or seen.add(z))][:5]
 
-def backtest(rows, lookback=120):
+def backtest(rows, lookback=160):
     rev = list(reversed(rows))
-    total = 0
-    hit = 0
-    cur_miss = 0
-    max_miss = 0
-
-    for i in range(30, len(rev) - 5):
+    total = hit = 0
+    cur_miss = max_miss = 0
+    for i in range(60, len(rev)-5):
         train = rev[i:]
-        if len(train) < 40:
-            continue
+        if len(train) < 50: continue
         total += 1
-        actual = get_zodiac(rev[i-1]["special_number"])   # 注意索引
-        preds = recommend(train, miss_count=cur_miss)
-
+        actual = get_zodiac(rev[i-1]["special_number"])
+        preds = recommend(train, cur_miss)
         if actual in preds:
             hit += 1
             cur_miss = 0
         else:
             cur_miss += 1
             max_miss = max(max_miss, cur_miss)
-
-    print("\n===== 优化后特五肖回测 =====")
+    print("\n===== 特五肖 v3 回测 =====")
     print(f"测试期数: {total}")
-    print(f"命中率: {hit/total:.1%}" if total > 0 else "命中率: N/A")
+    print(f"命中率: {hit/total:.1%}" if total else "N/A")
     print(f"最大连空: {max_miss}")
 
 def main():
-    print("正在获取最新六合彩数据...")
-    rows = fetch_hk_online(limit=150)
-    
+    print("正在获取最新数据...")
+    rows = fetch_hk_online(180)
     if not rows:
-        print("❌ 获取数据失败")
+        print("❌ 获取失败")
         return
-
     preds = recommend(rows)
-    print("\n【稳定版特五肖 v2】")
+    print("\n【稳定版特五肖 v3】")
     print("、".join(preds))
-
     backtest(rows)
 
 if __name__ == "__main__":
