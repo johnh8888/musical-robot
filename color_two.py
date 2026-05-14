@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# color_two.py - 特二色预测（自适应参数，首次运行自动搜索）
+# color_two.py - 特二色预测（强化连空保护版）
 
 import argparse
 import json
@@ -27,7 +27,7 @@ def get_history_colors(limit=None):
             colors.append(c)
     return colors
 
-def evaluate(colors, windows, weights, miss_factor, lookback=100):
+def evaluate(colors, windows, weights, lookback=100):
     total = min(lookback, len(colors) - 20)
     if total <= 0:
         return 0, 0
@@ -37,12 +37,12 @@ def evaluate(colors, windows, weights, miss_factor, lookback=100):
     for i in range(total):
         train = colors[i+20:]
         actual = colors[i]
+        # 调用强化版预测（需要将以下逻辑嵌入，但为了评估，我们内联）
         votes = Counter()
         for w in windows:
             weight = weights.get(w, 1.0)
             recent = train[:w]
             freq = Counter(recent)
-            # 简单频率投票，不加遗漏（可简化）
             top2 = [c for c, _ in freq.most_common(2)]
             for c in top2:
                 votes[c] += weight
@@ -53,11 +53,29 @@ def evaluate(colors, windows, weights, miss_factor, lookback=100):
                     pred.append(c)
                     if len(pred) == 2:
                         break
-        # 连空保护（激进：上一期未中即干预）
+        # 连空保护（强化）
         if miss_streak >= 1:
             hot = Counter(train[:10])
             if hot:
-                pred = [c for c, _ in hot.most_common(2)]
+                hottest_two = [c for c, _ in hot.most_common(2)]
+                last_color = train[0] if train else None
+                if last_color and last_color in hottest_two:
+                    for c in COLORS:
+                        if c not in hottest_two:
+                            hottest_two[-1] = c
+                            break
+                pred = hottest_two
+        if miss_streak >= 2:
+            global_hot = Counter(train)
+            if global_hot:
+                global_top2 = [c for c, _ in global_hot.most_common(2)]
+                last_color = train[0] if train else None
+                if last_color and last_color in global_top2:
+                    for c in COLORS:
+                        if c not in global_top2:
+                            global_top2[-1] = c
+                            break
+                pred = global_top2
         if actual in pred:
             hits += 1
             miss_streak = 0
@@ -67,28 +85,24 @@ def evaluate(colors, windows, weights, miss_factor, lookback=100):
     return hits / total, max_miss
 
 def auto_tune(colors):
-    print("首次运行，正在自动搜索最佳参数（约5秒）...")
-    windows = [10, 18, 20, 25]   # 固定窗口
+    print("首次运行，正在自动搜索最佳参数（随机搜索200次）...")
+    windows = [10, 18, 20, 25]
     best_hit = 0
     best_max_miss = 999
     best_weights = {w: 0.25 for w in windows}
-    best_miss_factor = 0.5
-    for _ in range(200):   # 随机搜索200次
+    for _ in range(200):
         raw_weights = [random.uniform(0.1, 1.0) for _ in windows]
         total = sum(raw_weights)
         weights = {w: raw_weights[i]/total for i, w in enumerate(windows)}
-        miss_factor = random.uniform(0.0, 1.0)
-        hit, max_miss = evaluate(colors, windows, weights, miss_factor, lookback=100)
+        hit, max_miss = evaluate(colors, windows, weights, lookback=100)
         if hit > best_hit or (hit == best_hit and max_miss < best_max_miss):
             best_hit = hit
             best_max_miss = max_miss
             best_weights = weights
-            best_miss_factor = miss_factor
-    print(f"搜索完成！命中率: {best_hit:.1%}, 最大连空: {best_max_miss}")
+    print(f"搜索完成！最佳命中率: {best_hit:.1%}, 最大连空: {best_max_miss}")
     config = {
         "windows": windows,
-        "window_weights": {str(k): v for k, v in best_weights.items()},
-        "miss_factor": best_miss_factor
+        "window_weights": {str(k): v for k, v in best_weights.items()}
     }
     with open("best_color_config.json", "w") as f:
         json.dump(config, f, indent=2)
@@ -98,7 +112,6 @@ def load_config():
     try:
         with open("best_color_config.json", "r") as f:
             cfg = json.load(f)
-        # 转换键为整数
         cfg["window_weights"] = {int(k): v for k, v in cfg["window_weights"].items()}
         return cfg
     except:
@@ -107,13 +120,11 @@ def load_config():
 def predict_two_colors(colors, config, miss_streak=0):
     windows = config["windows"]
     weights = config["window_weights"]
-    miss_factor = config["miss_factor"]
     votes = Counter()
     for w in windows:
         weight = weights.get(w, 1.0)
         recent = colors[:w]
         freq = Counter(recent)
-        # 可加入遗漏加分，但为简化，不使用 miss_factor
         top2 = [c for c, _ in freq.most_common(2)]
         for c in top2:
             votes[c] += weight
@@ -124,10 +135,29 @@ def predict_two_colors(colors, config, miss_streak=0):
                 pred.append(c)
                 if len(pred) == 2:
                     break
+    # 强化连空保护
     if miss_streak >= 1:
         hot = Counter(colors[:10])
         if hot:
-            return [c for c, _ in hot.most_common(2)]
+            hottest_two = [c for c, _ in hot.most_common(2)]
+            last_color = colors[0] if colors else None
+            if last_color and last_color in hottest_two:
+                for c in COLORS:
+                    if c not in hottest_two:
+                        hottest_two[-1] = c
+                        break
+            return hottest_two
+    if miss_streak >= 2:
+        global_hot = Counter(colors)
+        if global_hot:
+            global_top2 = [c for c, _ in global_hot.most_common(2)]
+            last_color = colors[0] if colors else None
+            if last_color and last_color in global_top2:
+                for c in COLORS:
+                    if c not in global_top2:
+                        global_top2[-1] = c
+                        break
+            return global_top2
     return pred
 
 def backtest_two_colors(colors, config, lookback):
@@ -172,7 +202,6 @@ def main():
         print(f"特二色推荐: {'、'.join(pred)}")
         print(f"使用窗口: {config['windows']}")
         print(f"窗口权重: {config['window_weights']}")
-        print(f"遗漏因子: {config['miss_factor']}")
 
         hit10, miss10 = backtest_two_colors(colors, config, 10)
         hit100, miss100 = backtest_two_colors(colors, config, 100)
