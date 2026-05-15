@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# zodiac_main_v7.py
+# zodiac_main_v7_fixed.py
 
 import gzip
 import json
@@ -10,18 +10,18 @@ from collections import Counter
 API_URL = "https://marksix6.net/index.php?api=1"
 
 ZODIAC_MAP = {
-"马": [1,13,25,37,49],
-"蛇": [2,14,26,38],
-"龙": [3,15,27,39],
-"兔": [4,16,28,40],
-"虎": [5,17,29,41],
-"牛": [6,18,30,42],
-"鼠": [7,19,31,43],
-"猪": [8,20,32,44],
-"狗": [9,21,33,45],
-"鸡": [10,22,34,46],
-"猴": [11,23,35,47],
-"羊": [12,24,36,48],
+    "马": [1,13,25,37,49],
+    "蛇": [2,14,26,38],
+    "龙": [3,15,27,39],
+    "兔": [4,16,28,40],
+    "虎": [5,17,29,41],
+    "牛": [6,18,30,42],
+    "鼠": [7,19,31,43],
+    "猪": [8,20,32,44],
+    "狗": [9,21,33,45],
+    "鸡": [10,22,34,46],
+    "猴": [11,23,35,47],
+    "羊": [12,24,36,48],
 }
 
 ZLIST = list(ZODIAC_MAP.keys())
@@ -55,7 +55,7 @@ def fetch(limit=300):
 
         for line in item.get("history",[]):
 
-            m = re.match(r"(\\d{7})\\s*期[：:]\\s*([\\d,，]+)", line)
+            m = re.match(r"(\d{7})\s*期[：:]\s*([\d,，]+)", line)
 
             if not m:
                 continue
@@ -172,65 +172,79 @@ def score(rows, miss=0):
 
     return sc
 
-def predict(rows, miss=0):
-
-    sc = score(rows, miss)
-
-    rank = [z for z,_ in sc.most_common()]
-
-    one = rank[:1]
+def predict(rows):
+    sc = score(rows)                     # miss 默认为 0，不做连空惩罚
+    ranked = [z for z, _ in sc.most_common()]
 
     om = omission(rows)
+    trans = transition(rows)
 
-    cold = sorted(
-        om,
-        key=om.get,
-        reverse=True
-    )
+    if not rows:
+        return ["马"], ["马", "蛇"], ["马", "蛇", "龙"]
 
-    two = [rank[0]]
+    last_z = zodiac(rows[-1]["special"])
 
-    for z in cold:
-        if z not in two:
-            two.append(z)
+    # 1热：评分最高
+    hot_z = ranked[0]
+
+    # 1趋势：从 last_z 出发转移次数最多的目标生肖
+    targets = [b for (a, b) in trans if a == last_z]
+    if targets:
+        trend_z = max(targets, key=lambda b: trans[(last_z, b)])
+    else:
+        # 无转移记录时，用评分第二高的作为趋势
+        trend_z = ranked[1] if len(ranked) > 1 else ranked[0]
+
+    selected = {hot_z, trend_z}
+
+    # 1极冷：遗漏值最大且不重复的生肖
+    cold_sorted = sorted(om.items(), key=lambda x: x[1], reverse=True)
+    cold_z = None
+    for z, _ in cold_sorted:
+        if z not in selected:
+            cold_z = z
             break
+    if cold_z is None:
+        for z in ranked:
+            if z not in selected:
+                cold_z = z
+                break
+        if cold_z is None:
+            cold_z = ranked[0]  # 极端兜底
 
-    three = [rank[0]]
-
-    for z in cold:
-
-        if z not in three:
-            three.append(z)
-
-        if len(three) >= 3:
-            break
+    one = [hot_z]
+    two = [hot_z, trend_z]
+    three = [hot_z, trend_z, cold_z]
 
     return one, two, three
 
 def backtest(rows):
-
     rev = list(reversed(rows))
 
+    if len(rev) < 60:
+        print("\n数据不足，无法回测")
+        return
+
+    total = min(100, len(rev) - 40)
+    if total <= 0:
+        print("\n回测样本不足")
+        return
+
+    h1 = h2 = h3 = 0
     miss1 = miss2 = miss3 = 0
     max1 = max2 = max3 = 0
 
-    h1 = h2 = h3 = 0
-
-    total = 0
-
-    for i in range(120, len(rev)-1):
-
-        train = rev[i:]
-
+    for i in range(40, 40 + total):
+        # 用第 i 期之前的历史训练（严格无未来信息）
+        train = list(reversed(rev[:i]))
         actual = {
-            zodiac(x)
-            for x in rev[i-1]["numbers"] + [rev[i-1]["special"]]
+            zodiac(n)
+            for n in (rev[i]["numbers"] + [rev[i]["special"]])
         }
 
-        one, two, three = predict(train, miss3)
+        one, two, three = predict(train)
 
-        total += 1
-
+        # 一肖
         if one[0] in actual:
             h1 += 1
             miss1 = 0
@@ -238,6 +252,7 @@ def backtest(rows):
             miss1 += 1
             max1 = max(max1, miss1)
 
+        # 二肖
         if any(z in actual for z in two):
             h2 += 1
             miss2 = 0
@@ -245,29 +260,28 @@ def backtest(rows):
             miss2 += 1
             max2 = max(max2, miss2)
 
-        cnt = sum(1 for z in three if z in actual)
-
-        if cnt >= 2:
+        # 三肖（至少中2个）
+        hit3 = sum(1 for z in three if z in actual)
+        if hit3 >= 2:
             h3 += 1
             miss3 = 0
         else:
             miss3 += 1
             max3 = max(max3, miss3)
 
-    print("\\n===== 回测 =====")
+    print("\n===== V7 回测（修复版） =====")
+    print(f"测试期数: {total}")
+    print(f"一肖: {h1/total:.1%}  连空{max1}")
+    print(f"二肖: {h2/total:.1%}  连空{max2}")
+    print(f"三肖: {h3/total:.1%}  连空{max3}")
 
-    print(f"一肖: {h1/total:.1%} 连空{max1}")
-    print(f"二肖: {h2/total:.1%} 连空{max2}")
-    print(f"三肖(中2): {h3/total:.1%} 连空{max3}")
+if __name__ == "__main__":
+    rows = fetch()
+    one, two, three = predict(rows)
 
-rows = fetch()
+    print("\n【V7 自动模型】")
+    print("一肖:", "、".join(one))
+    print("二肖:", "、".join(two))
+    print("三肖:", "、".join(three))
 
-one, two, three = predict(rows)
-
-print("\\n【V7 自动模型】")
-
-print("一肖:", "、".join(one))
-print("二肖:", "、".join(two))
-print("三肖:", "、".join(three))
-
-backtest(rows)
+    backtest(rows)
