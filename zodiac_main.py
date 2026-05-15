@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# -*- coding:utf-8 -*-
+# -*- coding: utf-8 -*-
 
 import gzip
 import json
@@ -7,31 +7,27 @@ import re
 import time
 import urllib.request
 from collections import Counter
+from itertools import combinations
 
 API_URL = "https://marksix6.net/index.php?api=1"
 
-# 正确生肖映射
+# 2026生肖映射
 ZODIAC_MAP = {
-    "马": [1,13,25,37,49],
-    "蛇": [2,14,26,38],
-    "龙": [3,15,27,39],
-    "兔": [4,16,28,40],
-    "虎": [5,17,29,41],
-    "牛": [6,18,30,42],
-    "鼠": [7,19,31,43],
-    "猪": [8,20,32,44],
-    "狗": [9,21,33,45],
-    "鸡": [10,22,34,46],
-    "猴": [11,23,35,47],
-    "羊": [12,24,36,48],
+    "马":[1,13,25,37,49],
+    "蛇":[2,14,26,38],
+    "龙":[3,15,27,39],
+    "兔":[4,16,28,40],
+    "虎":[5,17,29,41],
+    "牛":[6,18,30,42],
+    "鼠":[7,19,31,43],
+    "猪":[8,20,32,44],
+    "狗":[9,21,33,45],
+    "鸡":[10,22,34,46],
+    "猴":[11,23,35,47],
+    "羊":[12,24,36,48],
 }
 
 ZODIAC_LIST = list(ZODIAC_MAP.keys())
-
-DECAY_ALPHA = 0.84
-
-def decay(i):
-    return DECAY_ALPHA ** i
 
 def get_zodiac(n):
     for z, nums in ZODIAC_MAP.items():
@@ -39,17 +35,27 @@ def get_zodiac(n):
             return z
     return "马"
 
-def parse_nums(value):
-    return [
-        int(x)
-        for x in re.split(r"[，,]", value)
-        if x.strip().isdigit()
-    ]
+def next_issue(issue):
+    try:
+        y, s = issue.split("/")
+        return f"{y}/{int(s)+1:03d}"
+    except:
+        return issue
 
-def fetch_hk_online(limit=300):
+def parse_nums(s):
+    out = []
+    for x in re.split(r"[，,]", s):
+        x = x.strip()
+        if x.isdigit():
+            n = int(x)
+            if 1 <= n <= 49:
+                out.append(n)
+    return out
+
+def fetch_data(limit=300):
 
     headers = {
-        "User-Agent": "Mozilla/5.0"
+        "User-Agent":"Mozilla/5.0"
     }
 
     for _ in range(5):
@@ -62,7 +68,7 @@ def fetch_hk_online(limit=300):
 
                 raw = resp.read()
 
-                if "gzip" in resp.headers.get("Content-Encoding", ""):
+                if "gzip" in resp.headers.get("Content-Encoding",""):
                     raw = gzip.decompress(raw)
 
                 data = json.loads(raw.decode("utf-8"))
@@ -71,15 +77,12 @@ def fetch_hk_online(limit=300):
 
                 for item in data.get("lottery_data", []):
 
-                    if "香港" not in item.get("name", ""):
+                    if "香港" not in item.get("name",""):
                         continue
 
                     for line in item.get("history", []):
 
-                        m = re.match(
-                            r"(\d{7})\s*期[：:]\s*([\d,，]+)",
-                            line
-                        )
+                        m = re.match(r"(\d{7})\s*期[：:]\s*([\d,，]+)", line)
 
                         if not m:
                             continue
@@ -99,275 +102,176 @@ def fetch_hk_online(limit=300):
                             "special_number": nums[6]
                         })
 
-                rows = sorted(
-                    rows,
-                    key=lambda x: x["issue_no"],
-                    reverse=True
-                )
-
-                return rows[:limit]
+                if rows:
+                    return sorted(rows, key=lambda x:x["issue_no"])
 
         except:
             time.sleep(2)
 
     return []
 
-def omission_map(rows):
+def omission_map(history):
 
     om = {z:0 for z in ZODIAC_LIST}
 
-    for r in reversed(rows):
+    for r in reversed(history):
 
-        appeared = set(
-            get_zodiac(n)
-            for n in r["numbers"] + [r["special_number"]]
-        )
+        s = set(get_zodiac(n) for n in r["numbers"]+[r["special_number"]])
 
         for z in ZODIAC_LIST:
-            om[z] = 0 if z in appeared else om[z] + 1
+            om[z] = 0 if z in s else om[z]+1
 
     return om
 
-def stable_score(history):
+def build_combo_scores(history):
 
-    score = Counter()
+    combo_score = Counter()
 
-    recent = history[-90:]
+    recent = history[-120:]
 
-    # 近12期强化
-    for idx, r in enumerate(reversed(recent[-12:])):
+    for idx, r in enumerate(reversed(recent)):
 
-        for n in r["numbers"] + [r["special_number"]]:
+        weight = 0.985 ** idx
 
-            z = get_zodiac(n)
+        zset = set(get_zodiac(n) for n in r["numbers"]+[r["special_number"]])
 
-            score[z] += 0.62 * decay(idx)
+        for combo in combinations(sorted(zset), 3):
 
-    # 中期趋势
-    for idx, r in enumerate(reversed(recent[-45:])):
+            combo_score[combo] += weight
 
-        for n in r["numbers"] + [r["special_number"]]:
-
-            z = get_zodiac(n)
-
-            score[z] += 0.18 * decay(idx)
-
-    # 特码热度
-    sp_freq = Counter(
-        get_zodiac(r["special_number"])
-        for r in recent[-35:]
-    )
-
-    for z in ZODIAC_LIST:
-        score[z] += sp_freq.get(z, 0) * 0.11
-
-    # 冷号补偿
-    om = omission_map(history)
-
-    for z in ZODIAC_LIST:
-
-        score[z] += min(
-            om[z] * 0.12,
-            2.2
-        ) * 0.32
-
-    return score
+    return combo_score
 
 def predict(history):
 
-    score = stable_score(history)
+    combo_score = build_combo_scores(history)
 
     om = omission_map(history)
 
-    ranked = [z for z,_ in score.most_common()]
+    best_combo = None
+    best_score = -1
 
-    hot = ranked[:4]
+    for combo, score in combo_score.items():
 
-    middle = ranked[4:8]
+        vals = [om[z] for z in combo]
 
-    cold = sorted(
-        om.items(),
-        key=lambda x:x[1],
-        reverse=True
-    )
+        extra = 0
 
-    cold = [z for z,_ in cold[:4]]
+        if max(vals) >= 8:
+            extra += 0.6
 
-    # 一肖
-    s = [hot[0]]
+        if min(vals) <= 1:
+            extra += 0.2
 
-    # 二肖
-    t = []
+        extra += 0.3
 
-    t.append(hot[0])
+        final_score = score + extra
 
-    for z in middle:
-        if z not in t:
-            t.append(z)
-            break
+        if final_score > best_score:
+            best_score = final_score
+            best_combo = combo
 
-    # 三肖中二模型
-    th = []
+    th = list(best_combo)
 
-    # 热
-    th.append(hot[0])
+    pair_score = Counter()
 
-    # 温
-    for z in middle:
-        if z not in th:
-            th.append(z)
-            break
+    for combo, s in combo_score.items():
 
-    # 冷
-    for z in cold:
-        if z not in th:
-            th.append(z)
-            break
+        for p in combinations(combo, 2):
+            pair_score[p] += s
 
-    # 防止过热
-    recent_special = [
-        get_zodiac(r["special_number"])
-        for r in history[-6:]
-    ]
+    best_pair = list(pair_score.most_common(1)[0][0])
 
-    recent_freq = Counter(recent_special)
+    single = Counter()
 
-    overheat = [
-        z for z,c in recent_freq.items()
-        if c >= 3
-    ]
+    for combo, s in combo_score.items():
+        for z in combo:
+            single[z] += s
 
-    th = [z for z in th if z not in overheat]
+    best_single = [single.most_common(1)[0][0]]
 
-    while len(th) < 3:
+    return best_single, best_pair, th
 
-        for z in ranked:
-
-            if z not in th:
-
-                th.append(z)
-
-                break
-
-    return s, t[:2], th[:3]
-
-def backtest(rows):
-
-    rev = list(reversed(rows))
+def backtest(rows, lookback):
 
     total = 0
 
-    h1 = h2 = h3 = 0
+    h1=h2=h3=0
 
-    miss1 = miss2 = miss3 = 0
+    m1=m2=m3=0
 
-    max1 = max2 = max3 = 0
+    max1=max2=max3=0
 
-    total10 = 0
+    for i in range(120, len(rows)-1):
 
-    h1_10 = h2_10 = h3_10 = 0
+        train = rows[:i]
 
-    miss1_10 = miss2_10 = miss3_10 = 0
-
-    max1_10 = max2_10 = max3_10 = 0
-
-    for i in range(100, len(rev)-1):
-
-        train = rev[i:]
-
-        if len(train) < 60:
+        if len(train) < 120:
             continue
 
+        actual = set(get_zodiac(n) for n in rows[i]["numbers"]+[rows[i]["special_number"]])
+
+        s,b,t = predict(train)
+
         total += 1
-
-        actual = set(
-            get_zodiac(n)
-            for n in rev[i-1]["numbers"] + [rev[i-1]["special_number"]]
-        )
-
-        s, t, th = predict(train)
 
         # 一肖
         if s[0] in actual:
             h1 += 1
-            miss1 = 0
+            m1 = 0
         else:
-            miss1 += 1
-            max1 = max(max1, miss1)
+            m1 += 1
+            max1 = max(max1,m1)
 
         # 二肖
-        if any(z in actual for z in t):
+        if any(z in actual for z in b):
             h2 += 1
-            miss2 = 0
+            m2 = 0
         else:
-            miss2 += 1
-            max2 = max(max2, miss2)
+            m2 += 1
+            max2 = max(max2,m2)
 
         # 三肖中二
-        th_hit = sum(1 for z in th if z in actual)
+        cnt = sum(1 for z in t if z in actual)
 
-        if th_hit >= 2:
+        if cnt >= 2:
             h3 += 1
-            miss3 = 0
+            m3 = 0
         else:
-            miss3 += 1
-            max3 = max(max3, miss3)
+            m3 += 1
+            max3 = max(max3,m3)
 
-        # 最近10期
-        if total <= 10:
+    if total == 0:
+        total = 1
 
-            total10 += 1
+    print(f"\n===== 最近{lookback}期 =====")
 
-            if s[0] in actual:
-                h1_10 += 1
-
-            if any(z in actual for z in t):
-                h2_10 += 1
-
-            if th_hit >= 2:
-                h3_10 += 1
-
-    print("\n===== V10 职业终极版 =====")
-
-    if total > 0:
-
-        print(f"测试期数: {total}")
-
-        print(f"一肖: {h1/total:.1%} | 最大连空 {max1}")
-        print(f"二肖: {h2/total:.1%} | 最大连空 {max2}")
-        print(f"三肖: {h3/total:.1%} | 最大连空 {max3}")
-
-    if total10 > 0:
-
-        print("\n===== 最近10期 =====")
-
-        print(f"一肖: {h1_10/total10:.1%}")
-        print(f"二肖: {h2_10/total10:.1%}")
-        print(f"三肖: {h3_10/total10:.1%}")
+    print(f"一肖: {h1/total:.1%} | 最大连空 {max1}")
+    print(f"二肖: {h2/total:.1%} | 最大连空 {max2}")
+    print(f"三肖(中二): {h3/total:.1%} | 最大连空 {max3}")
 
 def main():
 
     print("正在获取最新数据...")
 
-    rows = fetch_hk_online(300)
+    rows = fetch_data()
 
     if not rows:
-
-        print("数据获取失败")
-
+        print("获取失败")
         return
 
-    s, t, th = predict(rows)
+    latest = rows[-1]["issue_no"]
 
-    print("\n【V10 职业终极模型】")
+    s,b,t = predict(rows)
 
-    print(f"预测期号: {rows[0]['issue_no']}")
-
+    print("\n【V12 组合职业版】")
+    print(f"预测期号: {next_issue(latest)}")
     print(f"一肖: {'、'.join(s)}")
-    print(f"二肖: {'、'.join(t)}")
-    print(f"三肖: {'、'.join(th)}")
+    print(f"二肖: {'、'.join(b)}")
+    print(f"三肖: {'、'.join(t)}")
 
-    backtest(rows)
+    backtest(rows[-110:],10)
+
+    backtest(rows[-200:],100)
 
 if __name__ == "__main__":
     main()
