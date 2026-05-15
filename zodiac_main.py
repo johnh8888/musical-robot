@@ -1,13 +1,35 @@
 #!/usr/bin/env python3
-# zodiac_main_v7_fixed.py
+# -*- coding: utf-8 -*-
+#
+# zodiac_main.py
+# 香港六合彩 · 一二三肖 V8 职业量化版
+#
+# 特性：
+# 1. 真正时间序回测（无未来函数）
+# 2. 转移链模型
+# 3. 状态机
+# 4. 周期识别
+# 5. 熔断器
+# 6. 波动率切换
+# 7. 三肖强制：
+#    1热 + 1趋势 + 1极冷
+#
+# GitHub Actions 直接运行兼容
+#
 
 import gzip
 import json
 import re
+import time
 import urllib.request
-from collections import Counter
+
+from collections import Counter, defaultdict
 
 API_URL = "https://marksix6.net/index.php?api=1"
+
+# =========================
+# 正确生肖映射（2026版）
+# =========================
 
 ZODIAC_MAP = {
     "马": [1,13,25,37,49],
@@ -24,293 +46,624 @@ ZODIAC_MAP = {
     "羊": [12,24,36,48],
 }
 
-ZLIST = list(ZODIAC_MAP.keys())
+ZODIAC_LIST = list(ZODIAC_MAP.keys())
 
-def zodiac(n):
+# =========================
+# 工具
+# =========================
+
+def get_zodiac(n):
+
     for z, nums in ZODIAC_MAP.items():
+
         if n in nums:
             return z
+
     return "马"
 
-def fetch(limit=300):
-    req = urllib.request.Request(
-        API_URL,
-        headers={"User-Agent":"Mozilla/5.0"}
-    )
+def next_issue(issue_no):
 
-    with urllib.request.urlopen(req, timeout=20) as r:
-        raw = r.read()
+    try:
 
-        if "gzip" in r.headers.get("Content-Encoding","").lower():
-            raw = gzip.decompress(raw)
+        if "/" in issue_no:
 
-        data = json.loads(raw.decode())
+            y, s = issue_no.split("/")
 
-    rows = []
+        else:
 
-    for item in data.get("lottery_data",[]):
+            y = issue_no[:4]
+            s = issue_no[4:]
 
-        if "香港" not in item.get("name","") and "六合彩" not in item.get("name",""):
+        return f"{y}/{str(int(s)+1).zfill(3)}"
+
+    except:
+
+        return issue_no
+
+# =========================
+# 获取数据
+# =========================
+
+def parse_nums(value):
+
+    out = []
+
+    for t in re.split(r"[，,]", value):
+
+        t = t.strip()
+
+        if not t:
             continue
 
-        for line in item.get("history",[]):
+        try:
 
-            m = re.match(r"(\d{7})\s*期[：:]\s*([\d,，]+)", line)
+            n = int(t)
 
-            if not m:
-                continue
+            if 1 <= n <= 49:
+                out.append(n)
 
-            nums = [
-                int(x)
-                for x in re.split(r"[，,]", m.group(2))
-                if x.strip()
-            ]
+        except:
+            pass
 
-            if len(nums) < 7:
-                continue
+    return out
 
-            rows.append({
-                "numbers": nums[:6],
-                "special": nums[6]
-            })
+def fetch_hk(limit=300):
 
-    return rows[:limit]
+    headers = {
+        "User-Agent": "Mozilla/5.0"
+    }
 
-def omission(rows):
+    for _ in range(5):
 
-    om = {z:0 for z in ZLIST}
+        try:
 
-    for r in reversed(rows):
+            req = urllib.request.Request(
+                API_URL,
+                headers=headers
+            )
 
-        hit = {
-            zodiac(x)
-            for x in r["numbers"] + [r["special"]]
-        }
+            with urllib.request.urlopen(req, timeout=20) as resp:
 
-        for z in ZLIST:
-            om[z] = 0 if z in hit else om[z] + 1
+                raw = resp.read()
+
+                if "gzip" in resp.headers.get(
+                    "Content-Encoding",
+                    ""
+                ).lower():
+
+                    raw = gzip.decompress(raw)
+
+                data = json.loads(raw.decode("utf-8"))
+
+                rows = []
+
+                for item in data.get("lottery_data", []):
+
+                    name = item.get("name","")
+
+                    if (
+                        "香港" not in name and
+                        "六合彩" not in name
+                    ):
+                        continue
+
+                    for line in item.get("history", []):
+
+                        m = re.match(
+                            r"(\d{7})\s*期[：:]\s*([\d,，]+)",
+                            line
+                        )
+
+                        if not m:
+                            continue
+
+                        nums = parse_nums(m.group(2))
+
+                        if len(nums) < 7:
+                            continue
+
+                        raw_issue = m.group(1)
+
+                        issue_no = (
+                            f"{raw_issue[2:4]}/"
+                            f"{int(raw_issue[4:]):03d}"
+                        )
+
+                        rows.append({
+                            "issue_no": issue_no,
+                            "numbers": nums[:6],
+                            "special_number": nums[6]
+                        })
+
+                rows = sorted(
+                    rows,
+                    key=lambda x: x["issue_no"],
+                    reverse=True
+                )
+
+                return rows[:limit]
+
+        except:
+            time.sleep(2)
+
+    return []
+
+# =========================
+# 遗漏值
+# =========================
+
+def omission_map(history):
+
+    om = {}
+
+    for z in ZODIAC_LIST:
+
+        miss = 0
+
+        for r in history:
+
+            cur = set(
+                get_zodiac(n)
+                for n in (
+                    r["numbers"] +
+                    [r["special_number"]]
+                )
+            )
+
+            if z in cur:
+                break
+
+            miss += 1
+
+        om[z] = miss
 
     return om
 
-def transition(rows):
+# =========================
+# 热度模型
+# =========================
 
-    trans = Counter()
+def hot_score(history):
 
-    recent = rows[-80:]
+    score = Counter()
 
-    for i in range(len(recent)-1):
+    recent_short = history[:12]
+    recent_mid = history[:30]
+    recent_long = history[:60]
 
-        a = zodiac(recent[i]["special"])
-        b = zodiac(recent[i+1]["special"])
+    # 短周期
+    for idx, r in enumerate(recent_short):
 
-        trans[(a,b)] += 1
+        weight = 3.5 - idx * 0.15
+
+        for n in r["numbers"] + [r["special_number"]]:
+
+            score[get_zodiac(n)] += weight
+
+    # 中周期
+    for idx, r in enumerate(recent_mid):
+
+        weight = 1.8 - idx * 0.03
+
+        for n in r["numbers"] + [r["special_number"]]:
+
+            score[get_zodiac(n)] += weight
+
+    # 长周期
+    for r in recent_long:
+
+        for n in r["numbers"] + [r["special_number"]]:
+
+            score[get_zodiac(n)] += 0.45
+
+    return score
+
+# =========================
+# 转移链
+# =========================
+
+def transition_model(history):
+
+    trans = defaultdict(Counter)
+
+    specials = [
+        get_zodiac(r["special_number"])
+        for r in history
+    ]
+
+    for i in range(len(specials)-1):
+
+        cur = specials[i+1]
+        nxt = specials[i]
+
+        trans[cur][nxt] += 1
 
     return trans
 
-def volatility(rows):
+# =========================
+# 状态机
+# =========================
 
-    recent = rows[-12:]
+def detect_state(history):
 
-    seq = [zodiac(r["special"]) for r in recent]
+    specials = [
+        get_zodiac(r["special_number"])
+        for r in history[:15]
+    ]
 
-    return len(set(seq))/12
+    freq = Counter(specials)
 
-def score(rows, miss=0):
+    top = freq.most_common(1)[0][1]
 
-    sc = Counter()
+    ratio = top / len(specials)
 
-    recent = rows[-60:]
+    # 单边
+    if ratio >= 0.45:
+        return "HOT"
 
-    om = omission(rows)
+    # 混乱
+    if len(set(specials[:6])) >= 5:
+        return "CHAOS"
 
-    trans = transition(rows)
+    return "NORMAL"
 
-    vol = volatility(rows)
+# =========================
+# 周期识别
+# =========================
 
-    for idx, r in enumerate(reversed(recent[-12:])):
+def cycle_boost(history):
 
-        z = zodiac(r["special"])
+    score = Counter()
 
-        sc[z] += 1.2 * (0.88 ** idx)
+    specials = [
+        get_zodiac(r["special_number"])
+        for r in history[:36]
+    ]
 
-    for idx, r in enumerate(reversed(recent[-30:])):
+    for z in ZODIAC_LIST:
 
-        z = zodiac(r["special"])
+        pos = []
 
-        sc[z] += 0.35 * (0.93 ** idx)
+        for i, x in enumerate(specials):
 
-    if recent:
+            if x == z:
+                pos.append(i)
 
-        last = zodiac(recent[-1]["special"])
+        if len(pos) >= 2:
 
-        for z in ZLIST:
-            sc[z] += trans[(last,z)] * 0.18
+            gaps = []
 
-    for z in ZLIST:
+            for i in range(len(pos)-1):
+                gaps.append(pos[i+1]-pos[i])
 
-        if vol > 0.72:
-            sc[z] += om[z] * 0.26
-        else:
-            sc[z] += om[z] * 0.14
+            avg_gap = sum(gaps)/len(gaps)
 
-    hot = [z for z,_ in sc.most_common(4)]
+            last_gap = pos[0]
 
-    if miss >= 1:
-        for z in hot:
-            sc[z] *= 0.82
+            # 接近周期
+            if abs(last_gap-avg_gap) <= 1.5:
 
-    if miss >= 2:
+                score[z] += 2.2
 
-        cold = sorted(
-            om,
-            key=om.get,
+    return score
+
+# =========================
+# 波动率识别
+# =========================
+
+def volatility_mode(history):
+
+    specials = [
+        get_zodiac(r["special_number"])
+        for r in history[:12]
+    ]
+
+    uniq = len(set(specials))
+
+    if uniq >= 8:
+        return "HIGH"
+
+    if uniq <= 4:
+        return "LOW"
+
+    return "MID"
+
+# =========================
+# 核心预测
+# =========================
+
+def professional_predict(history, miss3=0):
+
+    hot = hot_score(history)
+
+    om = omission_map(history)
+
+    trans = transition_model(history)
+
+    cyc = cycle_boost(history)
+
+    state = detect_state(history)
+
+    vol = volatility_mode(history)
+
+    score = Counter()
+
+    # =====================
+    # 热度
+    # =====================
+
+    for z in ZODIAC_LIST:
+
+        score[z] += hot[z]
+
+    # =====================
+    # 周期
+    # =====================
+
+    for z in cyc:
+
+        score[z] += cyc[z]
+
+    # =====================
+    # 转移链
+    # =====================
+
+    last_sp = get_zodiac(
+        history[0]["special_number"]
+    )
+
+    if last_sp in trans:
+
+        total = sum(
+            trans[last_sp].values()
+        )
+
+        if total > 0:
+
+            for z, v in trans[last_sp].items():
+
+                p = v / total
+
+                score[z] += p * 8.0
+
+    # =====================
+    # 状态机
+    # =====================
+
+    if state == "HOT":
+
+        hottest = hot.most_common(1)[0][0]
+
+        score[hottest] += 5.0
+
+    elif state == "CHAOS":
+
+        for z, v in sorted(
+            om.items(),
+            key=lambda x: x[1],
             reverse=True
-        )[:4]
+        )[:4]:
 
-        for z in cold:
-            sc[z] += 2.2
+            score[z] += 3.5
 
-    return sc
+    # =====================
+    # 波动率
+    # =====================
 
-def predict(rows):
-    sc = score(rows)                     # miss 默认为 0，不做连空惩罚
-    ranked = [z for z, _ in sc.most_common()]
+    if vol == "HIGH":
 
-    om = omission(rows)
-    trans = transition(rows)
+        for z, v in sorted(
+            om.items(),
+            key=lambda x: x[1],
+            reverse=True
+        )[:5]:
 
-    if not rows:
-        return ["马"], ["马", "蛇"], ["马", "蛇", "龙"]
+            score[z] += 2.2
 
-    last_z = zodiac(rows[-1]["special"])
+    elif vol == "LOW":
 
-    # 1热：评分最高
-    hot_z = ranked[0]
+        hottest = hot.most_common(3)
 
-    # 1趋势：从 last_z 出发转移次数最多的目标生肖
-    targets = [b for (a, b) in trans if a == last_z]
-    if targets:
-        trend_z = max(targets, key=lambda b: trans[(last_z, b)])
-    else:
-        # 无转移记录时，用评分第二高的作为趋势
-        trend_z = ranked[1] if len(ranked) > 1 else ranked[0]
+        for z, _ in hottest:
 
-    selected = {hot_z, trend_z}
+            score[z] += 2.5
 
-    # 1极冷：遗漏值最大且不重复的生肖
-    cold_sorted = sorted(om.items(), key=lambda x: x[1], reverse=True)
-    cold_z = None
-    for z, _ in cold_sorted:
-        if z not in selected:
-            cold_z = z
-            break
-    if cold_z is None:
-        for z in ranked:
-            if z not in selected:
-                cold_z = z
-                break
-        if cold_z is None:
-            cold_z = ranked[0]  # 极端兜底
+    # =====================
+    # 熔断器
+    # =====================
 
-    one = [hot_z]
-    two = [hot_z, trend_z]
-    three = [hot_z, trend_z, cold_z]
+    if miss3 >= 1:
+
+        for z, v in sorted(
+            om.items(),
+            key=lambda x: x[1],
+            reverse=True
+        )[:4]:
+
+            score[z] += 5.5
+
+    ranked = [
+        z for z, _
+        in score.most_common()
+    ]
+
+    # =====================
+    # 一肖
+    # =====================
+
+    one = [ranked[0]]
+
+    # =====================
+    # 二肖
+    # =====================
+
+    two = ranked[:2]
+
+    # =====================
+    # 三肖核心
+    # 1热 + 1趋势 + 1极冷
+    # =====================
+
+    hot_one = ranked[0]
+
+    trend_one = ranked[1]
+
+    cold_one = sorted(
+        om.items(),
+        key=lambda x: x[1],
+        reverse=True
+    )[0][0]
+
+    three = []
+
+    for z in [hot_one, trend_one, cold_one]:
+
+        if z not in three:
+            three.append(z)
+
+    for z in ranked:
+
+        if z not in three:
+            three.append(z)
+
+    three = three[:3]
 
     return one, two, three
 
+# =========================
+# 回测
+# =========================
+
 def backtest(rows):
-    # 将 rows 反转，假设原始 rows 为时间升序（旧→新），反转后 rev 为最新在前
+
     rev = list(reversed(rows))
 
-    # 至少需要 41 期：1 期预测 + 40 期训练
-    if len(rev) < 41:
-        print("\n数据不足，无法回测")
+    if len(rev) < 80:
+
+        print("\n数据不足")
         return
 
-    total = min(100, len(rev) - 40)
+    total = min(
+        100,
+        len(rev) - 40
+    )
+
     if total <= 0:
-        print("\n回测样本不足")
+
+        print("\n回测不足")
         return
 
     h1 = h2 = h3 = 0
+
     miss1 = miss2 = miss3 = 0
+
     max1 = max2 = max3 = 0
 
-    # 存储每期预测详情
-    details = []
+    for i in range(40, 40 + total):
 
-    for i in range(total):
-        # 用比 rev[i] 更旧的数据训练（严格无未来信息）
-        train = rev[i+1:]
+        train = list(
+            reversed(rev[:i])
+        )
 
-        # 第 i 期的实际开奖生肖集合（正码+特码）
-        actual = set()
-        for n in rev[i]["numbers"] + [rev[i]["special"]]:
-            actual.add(zodiac(n))
+        actual = set(
+            get_zodiac(n)
+            for n in (
+                rev[i]["numbers"] +
+                [rev[i]["special_number"]]
+            )
+        )
 
-        one, two, three = predict(train)
+        s, t, th = professional_predict(
+            train,
+            miss3
+        )
 
-        # 记录详情
-        details.append({
-            "offset": i,                      # 距今天数（0 为最新）
-            "one": one[0],
-            "two": list(two),
-            "three": list(three),
-            "special_zodiac": zodiac(rev[i]["special"]),
-            "numbers_zodiacs": [zodiac(n) for n in rev[i]["numbers"]],
-            "actual_zodiacs": actual,
-            "hit_one": one[0] in actual,
-            "hit_two": any(z in actual for z in two),
-            "hit_three": sum(1 for z in three if z in actual) >= 2
-        })
+        # 一肖
+        if s[0] in actual:
 
-        # 更新命中统计
-        if details[-1]["hit_one"]:
             h1 += 1
             miss1 = 0
+
         else:
+
             miss1 += 1
             max1 = max(max1, miss1)
 
-        if details[-1]["hit_two"]:
+        # 二肖
+        if any(z in actual for z in t):
+
             h2 += 1
             miss2 = 0
+
         else:
+
             miss2 += 1
             max2 = max(max2, miss2)
 
-        if details[-1]["hit_three"]:
+        # 三肖（必须中2）
+        hit3 = sum(
+            1 for z in th
+            if z in actual
+        )
+
+        if hit3 >= 2:
+
             h3 += 1
             miss3 = 0
+
         else:
+
             miss3 += 1
             max3 = max(max3, miss3)
 
-    # ========= 整体统计 =========
-    print("\n===== V7 回测（修复版） =====")
+    print("\n===== V8 职业量化回测 =====")
+
     print(f"测试期数: {total}")
-    print(f"一肖命中率: {h1/total:.1%}  最大连空: {max1}")
-    print(f"二肖命中率: {h2/total:.1%}  最大连空: {max2}")
-    print(f"三肖(中2)率: {h3/total:.1%}  最大连空: {max3}")
 
-    # ========= 最近10期详情 =========
-    print("\n===== 最近10期预测详情（0=最新） =====")
-    print(f"{'距今天数':<8} {'预测一肖':<6} {'预测二肖':<12} {'预测三肖':<18} {'实际特肖':<6} {'正码生肖':<24} {'一肖':<5} {'二肖':<5} {'三肖':<5}")
-    print("-" * 100)
-    for d in details[:10]:
-        offset_day = d["offset"] + 1   # 第1期是上一期
-        print(f"{offset_day:<8} {d['one']:<6} {','.join(d['two']):<12} {','.join(d['three']):<18} "
-              f"{d['special_zodiac']:<6} {','.join(d['numbers_zodiacs']):<24} "
-              f"{'✓' if d['hit_one'] else '✗':<5} {'✓' if d['hit_two'] else '✗':<5} {'✓' if d['hit_three'] else '✗':<5}")
-    print()
+    print(
+        f"一肖: {h1/total:.1%} | 最大连空 {max1}"
+    )
 
-if __name__ == "__main__":
-    rows = fetch()
-    one, two, three = predict(rows)
+    print(
+        f"二肖: {h2/total:.1%} | 最大连空 {max2}"
+    )
 
-    print("\n【V7 自动模型】")
-    print("一肖:", "、".join(one))
-    print("二肖:", "、".join(two))
-    print("三肖:", "、".join(three))
+    print(
+        f"三肖: {h3/total:.1%} | 最大连空 {max3}"
+    )
+
+# =========================
+# 主程序
+# =========================
+
+def main():
+
+    print("正在获取最新数据...")
+
+    rows = fetch_hk(300)
+
+    if not rows:
+
+        print("数据获取失败")
+        return
+
+    latest = rows[0]["issue_no"]
+
+    s, t, th = professional_predict(rows)
+
+    print("\n【V8 职业量化模型】")
+
+    print(f"预测期号: {next_issue(latest)}")
+
+    print(f"一生肖: {'、'.join(s)}")
+
+    print(f"二生肖: {'、'.join(t)}")
+
+    print(f"三生肖: {'、'.join(th)}")
 
     backtest(rows)
+
+# =========================
+
+if __name__ == "__main__":
+    main()
